@@ -148,7 +148,7 @@ class SparseRecon:
             # —— 模型 B：图片数 >= 2 ——
             params_warmup_B = {
                 "video_length": self.args.view_num,
-                "sample_size_list": [],
+                "sample_size_list": getattr(self.args, "video_warmup_sizes", []),
                 "prompt_embed_path": self.prompt_embed_path
             }
             params_B = {
@@ -177,9 +177,10 @@ class SparseRecon:
 
             # pool_B 初始化时都建好并 warmup + offload
             self.pool_B = WorkerPool("B", pool_B_world_size, params_B, params_warmup_B, self.mp_ctx, device_ids=pool_B_device_ids)
-            # self.pool_B.start()
+            startup_started = time.perf_counter()
             try:
                 self.pool_B.start()
+                logger.info(f"Pool B model startup (including warmup): {time.perf_counter() - startup_started:.2f}s")
             except Exception:
                 logger.error("pool B startup failed, cleaning up all workers...")
                 self.shutdown_workers()   # 会遍历 pool_A / pool_B 逐个 shutdown

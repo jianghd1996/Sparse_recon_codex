@@ -426,9 +426,17 @@ def _warmup(model, params, device):
     pe = [embeds["prompt"].to(device)]
     ne = [embeds["negative"].to(device)]
     del embeds
+    warmup_video = getattr(model, "warmup_video", None)
     with torch.inference_mode():
         for h, w in sizes:
-            _warmup_one(model, video_length, h, w, pe, ne, device)
+            started = time.perf_counter()
+            if warmup_video is None:
+                _warmup_one(model, video_length, h, w, pe, ne, device)
+            else:
+                warmup_video(video_length, h, w, pe, ne)
+            torch.cuda.synchronize(device)
+            print(f"[video warmup] {device} {video_length} frames {h}x{w}: "
+                  f"{time.perf_counter() - started:.2f}s", flush=True)
 
 
 def _warmup_one(model, frames, h, w, pe, ne, device):

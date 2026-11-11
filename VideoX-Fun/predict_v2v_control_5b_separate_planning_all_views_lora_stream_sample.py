@@ -435,6 +435,46 @@ class Wan_5b(object):
         self.device   = device
         self.weight_dtype   = weight_dtype
 
+    def warmup_video(self, frames, height, width, prompt_embeds, negative_prompt_embeds):
+        """Warm the multi-image path without advancing the inference RNG."""
+        ratio = self.vae.config.temporal_compression_ratio
+        if (frames - 1) % ratio or height % 32 or width % 32 or min(height, width) < 32:
+            raise ValueError(f"Invalid video warmup shape: {frames}x{height}x{width}")
+
+        cpu_generator = torch.Generator(device="cpu").manual_seed(42)
+        control = torch.rand(
+            (1, 3, frames, height, width), dtype=self.weight_dtype, generator=cpu_generator,
+        )
+        video = torch.zeros_like(control)
+        video[:, :, 0] = control[:, :, 0]
+        video[:, :, -1] = control[:, :, -1]
+        mask = torch.full((1, 1, frames, height, width), 255, dtype=self.weight_dtype)
+        mask[:, :, 0] = 0
+        mask[:, :, -1] = 0
+        ref_image = control[:, :, -1:].contiguous()
+
+        self.pipeline(
+            prompt=None,
+            negative_prompt=None,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            num_frames=frames,
+            height=height,
+            width=width,
+            num_inference_steps=1,
+            guidance_scale=0.0,
+            generator=torch.Generator(device=self.device).manual_seed(42),
+            video=video,
+            mask_video=mask,
+            mask_cache_video=mask,
+            control_video=control,
+            ref_image=ref_image,
+            boundary=self.boundary,
+            shift=self.shift,
+            low_vram=False,
+            offload_vae=self.offload_vae,
+        )
+
     def infer(self, args, device='cuda'):
         # New callers send a filename; older shared-tensor callers still work.
         # The mapping stays local to this invocation, never on self or args.
