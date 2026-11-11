@@ -152,7 +152,8 @@ class SparseRecon:
                 "prompt_embed_path": self.prompt_embed_path
             }
             params_B = {
-                "module_name": "VideoX-Fun.predict_v2v_control_5b_separate_planning_all_views_lora_stream_sample_batch",
+                "module_name": "VideoX-Fun.predict_v2v_control_5b_separate_planning_all_views_lora_stream_sample",
+                "offload_model": getattr(self.args, "video_offload", False),
                 "class_name": "Wan_5b",
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_5b.yaml"),
                 "model_name": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/"),
@@ -369,11 +370,14 @@ class SparseRecon:
             if failed:
                 # Never continue into COLMAP/3DGS using partial video outputs.
                 raise RuntimeError(f"[pool B] current case failed: {failed}")
+            logger.info(f"video generation: {time.time() - st_T:.2f}s")
         finally:
+            cleanup_started = time.perf_counter()
             _, offload_failed = pool._offload_all_best_effort()
             if offload_failed:
-                raise RuntimeError(f"[pool B] offload failed: {offload_failed}")
-        logger.info(f"video generation + offload: {time.time() - st_T:.2f}s")
+                raise RuntimeError(f"[pool B] cleanup failed: {offload_failed}")
+            cleanup_mode = "CPU offload" if getattr(self.args, "video_offload", False) else "cache cleanup"
+            logger.info(f"Pool B {cleanup_mode}: {time.perf_counter() - cleanup_started:.2f}s")
         return None
 
     def init_recon(self, work_dir:str):

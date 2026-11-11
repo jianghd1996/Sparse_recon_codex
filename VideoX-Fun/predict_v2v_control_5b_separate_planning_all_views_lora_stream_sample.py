@@ -102,7 +102,10 @@ def replace_linear_norm(
 
 class Wan_5b(object):
     def __init__(self, args, device="cuda"):
-        GPU_memory_mode     = "model_full_load" # model_cpu_offload sequential_cpu_offload model_cpu_offload_and_qfloat8
+        GPU_memory_mode = (
+            "model_cpu_offload" if getattr(args, "offload_model", False) else "model_full_load"
+        )
+        logger.info(f"Wan memory mode: {GPU_memory_mode}")
         weight_dtype        = torch.bfloat16
         ulysses_degree      = 1
         ring_degree         = 1 # zj_test multi card

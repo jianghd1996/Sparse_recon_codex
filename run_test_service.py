@@ -18,6 +18,7 @@ import time
         use_view_extrapolation: bool    视角外插
     run_livephoto: bool             是否用livephoto进行视角扩充
     run_gen_video: bool             是否进行视频生成
+        video_offload: bool            多图 Wan 推理启用 CPU offload，默认关闭
         gen_vid_fps: int                视频生成保存fps
     run_3dgs_iter: bool             是否稠密重建
 '''
@@ -37,6 +38,7 @@ if __name__ == "__main__":
                     "view_num":81,
                     "gen_vid_infer_step":6,
                     "gen_vid_fps":30,
+                    "video_offload":false,
                 "world_size":2,
 
                 "run_3dgs_iter":false

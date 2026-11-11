@@ -261,7 +261,7 @@ class WorkerPool:
                 raise PoolRecoveryError(self.name, "initialization", {}, exc) from exc
 
     def is_ready(self):
-        """Snapshot: initialized, all ranks alive, and offload acknowledged."""
+        """Snapshot: initialized, all ranks alive, and idle cleanup acknowledged."""
         with self._lock:
             return (not self._closing.is_set() and not self._aborting.is_set()
                     and self._started and self._idle_offloaded
@@ -450,12 +450,13 @@ def _warmup_one(model, frames, h, w, pe, ne, device):
     )
 
 
-def _run_command(model, command, payload, device_id):
+def _run_command(model, command, payload, device_id, *, offload_model=False):
     """Return strings only; exception traceback/param frames die before reply."""
     import torch
     try:
         if command == "offload":
-            # _offload_pipeline(model)
+            if offload_model:
+                _offload_pipeline(model)
             _cleanup_cuda()
             return "offloaded", None
         if command == "reload":
@@ -545,7 +546,10 @@ def persistent_worker_fn(rank, world_size, device_id, model_params_dict,
             command = message.get("command")
             if command == "stop":
                 break
-            status, error = _run_command(model, command, message.get("payload"), device_id)
+            status, error = _run_command(
+                model, command, message.get("payload"), device_id,
+                offload_model=model_params_dict.get("offload_model", False),
+            )
             request_id = message.get("request_id")
             message = None  # Release this request's shared input references.
             reply(request_id, status, error)
