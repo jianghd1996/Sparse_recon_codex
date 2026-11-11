@@ -399,7 +399,8 @@ def _offload_pipeline(model):
                 raise RuntimeError("An unoffloaded component spans GPUs; custom restoration is required")
             # No hook loaded this component back automatically: remember the
             # original device for excluded modules and custom VAE components.
-            restore[id(component)] = (component, next(iter(cuda_devices)))
+            if component is not getattr(pipe, "vae", None) or not getattr(model, "manages_vae_placement", False):
+                restore[id(component)] = (component, next(iter(cuda_devices)))
             component.to("cpu")
     # Optional explicit cache release supplied by the custom Wan wrapper.
     release = getattr(model, "release_task_cache", None)

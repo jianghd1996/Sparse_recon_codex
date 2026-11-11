@@ -48,7 +48,11 @@ save_videos_grid = make_save_videos_grid(
 cur_py_path = os.path.dirname(os.path.realpath(__file__))
 
 class Wan_5b(object):
+    # The pipeline places the complete VAE on GPU when encoding starts.
+    manages_vae_placement = True
+
     def __init__(self, args, device="cuda"):
+        self.offload_vae = getattr(args, "offload_vae", True)
         GPU_memory_mode     = "model_cpu_offload" # model_cpu_offload sequential_cpu_offload model_cpu_offload_and_qfloat8
         weight_dtype        = torch.bfloat16
         ulysses_degree      = 1
@@ -396,6 +400,7 @@ class Wan_5b(object):
                     denoising_strength = denoising_strength,
                     boundary = boundary,
                     shift = shift,
+                    offload_vae=self.offload_vae,
                 ).videos
                 infer_time = time.time()-st_T
                 logger.info(f"infer_time: {infer_time}s ")
@@ -406,8 +411,9 @@ class Wan_5b(object):
                 else:
                     prefix = 'right'
                 video_path = os.path.join(save_path, prefix + ".mp4")
+                save_started = time.perf_counter()
                 save_videos_grid(sample, video_path, fps=fps, reverse_width=reverse_width)
-                save_vid_time = time.time()-st_T
+                save_vid_time = time.perf_counter() - save_started
                 logger.info(f"save gen vid: {save_vid_time}s")
 
 if __name__ == '__main__':

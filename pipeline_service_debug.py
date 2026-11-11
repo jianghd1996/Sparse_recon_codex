@@ -110,7 +110,10 @@ class SparseRecon:
                 "sample_size_list": [],
                 "prompt_embed_path": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/prompt.pt"),
             }
+            livephoto_vae_offload = getattr(self.args, "livephoto_vae_offload", True)
             params_A = {
+                "offload_vae": livephoto_vae_offload,
+                "offload_model": not livephoto_vae_offload,
                 "module_name": "VideoX-Fun.predict_i2v_4dlivephoto_lightvae",  
                 "class_name": "Wan_5b",                                 
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_4dlp_5b.yaml"),

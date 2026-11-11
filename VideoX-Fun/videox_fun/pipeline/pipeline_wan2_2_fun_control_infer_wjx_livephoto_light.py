@@ -642,6 +642,7 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
         use_fixed_key_frames=False,
         reverse_width=False,
         denoising_strength=1.0,
+        offload_vae: bool = True,
     ) -> Union[WanPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -693,6 +694,7 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
         #   transformer denoise  -> VAE on CPU
         #   streaming decode     -> VAE on GPU
         #   call finished        -> VAE on CPU
+        # With offload_vae=False, the VAE stays on GPU until the worker releases it.
         #
         # This avoids layer-wise offload inside the stateful LightVAE.
         # ============================================================
@@ -722,6 +724,8 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
             print(f"[VAE offload] VAE -> {_vae_device()}")
 
         def _vae_to_cpu():
+            if not offload_vae:
+                return
             current = _vae_device()
             if current.type != "cpu":
                 if torch.cuda.is_available():
@@ -1029,10 +1033,11 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
         latents = latents[:,:,:real_latent_length]
 
         # Transformer remains managed by sequential-offload hooks.
-        # Clear cached allocator blocks before loading the whole VAE back.
+        # Clear cached allocator blocks before loading an offloaded VAE back.
         if torch.cuda.is_available():
             torch.cuda.synchronize(device)
-            torch.cuda.empty_cache()
+            if offload_vae:
+                torch.cuda.empty_cache()
         # _print_cuda_mem("after denoising / before VAE decode")
 
         st_T = time.time()
