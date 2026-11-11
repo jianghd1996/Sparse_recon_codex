@@ -1063,8 +1063,13 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         # assert freqs are same size
         # freqs = self.rope_position_embedding.generate_embeddings(torch.Size([len(grid_sizes), T, H, W, self.dim])).contiguous()
-        freqs = [self.rope_position_embedding.generate_embeddings(torch.Size([1, u[0], u[1], u[2], self.dim])).contiguous() for u in grid_sizes]
-        freqs = torch.cat(freqs, dim=0)
+        # Flash rotary broadcasts one frequency grid across the batch.
+        if not torch.equal(grid_sizes, grid_sizes[:1].expand_as(grid_sizes)):
+            raise ValueError("SLA rotary embedding requires the same patch grid for every sample")
+        frames, height, width = grid_sizes[0].tolist()
+        freqs = self.rope_position_embedding.generate_embeddings(
+            torch.Size([1, frames, height, width, self.dim])
+        ).contiguous()
         
 
         if clip_fea is not None:

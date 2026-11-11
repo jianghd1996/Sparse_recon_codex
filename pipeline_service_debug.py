@@ -155,6 +155,7 @@ class SparseRecon:
                 "module_name": "VideoX-Fun.predict_v2v_control_5b_separate_planning_all_views_lora_stream_sample",
                 "offload_model": getattr(self.args, "video_offload", False),
                 "offload_vae": getattr(self.args, "video_vae_offload", True),
+                "video_batch_size": getattr(self.args, "video_batch_size", 1),
                 "class_name": "Wan_5b",
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_5b.yaml"),
                 "model_name": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/"),

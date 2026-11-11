@@ -100,13 +100,29 @@ def replace_linear_norm(
         setattr(parent_module, name_parts[-1], new_module)
     return model
 
+def group_video_segments(indices, segment_plan, frames, batch_size):
+    for offset in range(0, len(indices), batch_size):
+        group = indices[offset:offset + batch_size]
+        if len(group) == 2 and any(
+            sorted(frame for _, frame in segment_plan[i]) != [0, frames - 1]
+            for i in group
+        ):
+            yield from ([i] for i in group)
+        else:
+            yield group
+
+
 class Wan_5b(object):
     def __init__(self, args, device="cuda"):
         GPU_memory_mode = (
             "model_cpu_offload" if getattr(args, "offload_model", False) else "model_full_load"
         )
         self.offload_vae = getattr(args, "offload_vae", True) or GPU_memory_mode == "model_cpu_offload"
-        logger.info(f"Wan memory mode: {GPU_memory_mode}, VAE offload: {self.offload_vae}")
+        self.video_batch_size = getattr(args, "video_batch_size", 1)
+        if self.video_batch_size not in (1, 2):
+            raise ValueError("video_batch_size must be 1 or 2")
+        logger.info(f"Wan memory mode: {GPU_memory_mode}, VAE offload: {self.offload_vae}, "
+                    f"video batch size: {self.video_batch_size}")
         weight_dtype        = torch.bfloat16
         ulysses_degree      = 1
         ring_degree         = 1 # zj_test multi card
@@ -443,7 +459,8 @@ class Wan_5b(object):
 
         cpu_generator = torch.Generator(device="cpu").manual_seed(42)
         control = torch.rand(
-            (1, 3, frames, height, width), dtype=self.weight_dtype, generator=cpu_generator,
+            (self.video_batch_size, 3, frames, height, width),
+            dtype=self.weight_dtype, generator=cpu_generator,
         )
         video = torch.zeros_like(control)
         video[:, :, 0] = control[:, :, 0]
@@ -456,7 +473,7 @@ class Wan_5b(object):
         self.pipeline(
             prompt=None,
             negative_prompt=None,
-            prompt_embeds=prompt_embeds,
+            prompt_embeds=prompt_embeds * self.video_batch_size,
             negative_prompt_embeds=negative_prompt_embeds,
             num_frames=frames,
             height=height,
@@ -473,6 +490,7 @@ class Wan_5b(object):
             shift=self.shift,
             low_vram=False,
             offload_vae=self.offload_vae,
+            video_batch_size=self.video_batch_size,
         )
 
     def infer(self, args, device='cuda'):
@@ -571,90 +589,89 @@ class Wan_5b(object):
             save_vid_time = 0.0
             # videos = []
 
-            for i in range(len(args.index)):
-                if i % args.num_gpus != args.rank:
-                    continue
-
-                
-                logger.info(f"gen vid: {i+1}/{len(args.index)}")
-                input_video = input_video_source[:, :, i*video_length:(i+1)*video_length].contiguous()
-
-                images = [os.path.join(args.image_path, img_lst[x[0]]) for x in args.index[i]]
-                index = [x[1] for x in args.index[i]]
-                ref_image = images[-1]
-
-                if len(args.save_img_ids) == len(args.index):
-                    save_img_ids = args.save_img_ids[i]
-                else:
-                    save_img_ids = None
-
-                st_T = time.time()
-                # inpaint_video, inpaint_video_mask, clip_image = get_image_to_video_latent(start_image, end_image, video_length=video_length, sample_size=sample_size)
-                inpaint_video, inpaint_video_mask, clip_image = get_inpaint_video_latent(images, index, video_length=video_length, sample_size=sample_size)
-
-                if ref_image is not None:
-                    ref_image = get_image_latent(ref_image, sample_size=sample_size)
-                end_T = time.time()
-                logger.info(f"load control video time: {end_T-st_T}s ")
-
-                st_T = time.time()
-                sample = pipeline(
-                    prompt=None, 
-                    num_frames = video_length,
-                    negative_prompt = None,
-                    prompt_embeds = prompt_embeds,
-                    negative_prompt_embeds = negative_prompt_embeds,
-                    height      = sample_size[0],
-                    width       = sample_size[1],
-                    generator   = generator,
-                    guidance_scale = guidance_scale,
-                    num_inference_steps = num_inference_steps,
-
-                    video      = inpaint_video,
-                    mask_video   = inpaint_video_mask,
-                    mask_cache_video = mask_video,
-                    control_video = input_video,
-                    control_camera_video = control_camera_video,
-                    ref_image = ref_image,
-                    boundary = boundary,
-                    shift = shift,
-                    low_vram = False,
-                    offload_vae = self.offload_vae,
-                ).videos
-                infer_time = time.time()-st_T
-                logger.info(f"infer_time: {infer_time}s ")
-                # videos.append(sample)
-
-            
-                os.makedirs(save_path, exist_ok=True)
-
-                st_T = time.time()
-                if save_img_ids is None:
-                    index = i
-                    prefix = str(index).zfill(8)
-                    video_path = os.path.join(save_path, prefix + ".mp4")
-                    save_videos_grid(sample, video_path, fps=fps)
-                    save_img_time = time.time()-st_T
-                    logger.info(f"save gen video: {save_img_time}s")
-                else:
-                    # args.video_fps, args.img_size
-                    image_save_dir = os.path.join(save_path, "image")
-                    save_selected_images_from_video_tensor(
-                        videos=sample,
-                        images_path=image_save_dir,
-                        index=i,
-                        save_image_ids=save_img_ids,
-                        resize=args.img_size,
-                        frames_per_segment=video_length,
-                        rescale=False,
-                        n_rows=6,
-                        use_global_name=True,
+            assigned = list(range(args.rank, len(args.index), args.num_gpus))
+            for segment_ids in group_video_segments(assigned, args.index, video_length, self.video_batch_size):
+                st_T = time.perf_counter()
+                inpaint_videos, reference_images, control_videos = [], [], []
+                for segment_id in segment_ids:
+                    logger.info(f"gen vid: {segment_id + 1}/{len(args.index)}")
+                    start_frame = segment_id * video_length
+                    control_videos.append(
+                        input_video_source[:, :, start_frame:start_frame + video_length].contiguous()
                     )
-                    save_img_time = time.time()-st_T
-                    logger.info(f"save gen images: {save_img_time}s")
+                    images = [os.path.join(args.image_path, img_lst[x[0]]) for x in args.index[segment_id]]
+                    frame_ids = [x[1] for x in args.index[segment_id]]
+                    video, inpaint_mask, _ = get_inpaint_video_latent(
+                        images, frame_ids, video_length=video_length, sample_size=sample_size,
+                    )
+                    inpaint_videos.append(video)
+                    reference_images.append(get_image_latent(images[-1], sample_size=sample_size))
+                logger.info(f"load control video time: {time.perf_counter() - st_T:.3f}s")
 
-                del sample, input_video, inpaint_video, inpaint_video_mask
-                ref_image = clip_image = None
+                batch_size = len(segment_ids)
+                if batch_size == 2:
+                    input_video = torch.cat(control_videos)
+                    inpaint_video = torch.cat(inpaint_videos)
+                    ref_image = torch.cat(reference_images)
+                    inpaint_mask = mask_video
+                else:
+                    input_video = control_videos[0]
+                    inpaint_video = inpaint_videos[0]
+                    ref_image = reference_images[0]
+                del control_videos, inpaint_videos, reference_images, video, _
+
+                st_T = time.perf_counter()
+                samples = pipeline(
+                    prompt=None,
+                    num_frames=video_length,
+                    negative_prompt=None,
+                    prompt_embeds=prompt_embeds * batch_size if prompt_embeds is not None else None,
+                    negative_prompt_embeds=negative_prompt_embeds,
+                    height=sample_size[0],
+                    width=sample_size[1],
+                    generator=generator,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    video=inpaint_video,
+                    mask_video=inpaint_mask,
+                    mask_cache_video=mask_video,
+                    control_video=input_video,
+                    control_camera_video=control_camera_video,
+                    ref_image=ref_image,
+                    boundary=boundary,
+                    shift=shift,
+                    low_vram=False,
+                    offload_vae=self.offload_vae,
+                    video_batch_size=batch_size,
+                ).videos
+                logger.info(f"infer_time: {time.perf_counter() - st_T:.3f}s "
+                            f"(batch={batch_size}, segments={[i + 1 for i in segment_ids]})")
+                del input_video, inpaint_video, inpaint_mask, ref_image
+
+                os.makedirs(save_path, exist_ok=True)
+                for position, segment_id in enumerate(segment_ids):
+                    sample = samples[position:position + 1]
+                    save_img_ids = args.save_img_ids[segment_id] if len(args.save_img_ids) == len(args.index) else None
+                    st_T = time.perf_counter()
+                    if save_img_ids is None:
+                        video_path = os.path.join(save_path, f"{segment_id:08d}.mp4")
+                        save_videos_grid(sample, video_path, fps=fps)
+                        logger.info(f"save gen video: {time.perf_counter() - st_T:.3f}s")
+                    else:
+                        save_selected_images_from_video_tensor(
+                            videos=sample,
+                            images_path=os.path.join(save_path, "image"),
+                            index=segment_id,
+                            save_image_ids=save_img_ids,
+                            resize=args.img_size,
+                            frames_per_segment=video_length,
+                            rescale=False,
+                            n_rows=6,
+                            use_global_name=True,
+                        )
+                        logger.info(f"save gen images: {time.perf_counter() - st_T:.3f}s")
+                    del sample
+                del samples
                 release_free_host_memory()
 
 if __name__ == '__main__':

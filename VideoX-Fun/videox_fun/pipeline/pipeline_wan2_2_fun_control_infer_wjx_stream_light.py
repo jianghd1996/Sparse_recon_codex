@@ -562,7 +562,14 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
 
         dtype = _activation_dtype(dtype)
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            if batch_size > 1 and not isinstance(generator, list):
+                # Consume the same RNG draws as separate calls on this worker.
+                latents = torch.cat([
+                    randn_tensor((1, *shape[1:]), generator=generator, device=device, dtype=dtype)
+                    for _ in range(batch_size)
+                ])
+            else:
+                latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
         else:
             latents = latents.to(device=device, dtype=dtype)
 
@@ -668,23 +675,37 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
 
         # Rebuild from mask_condition to support caches made by the older version.
         cache['mask_tile'] = mask_condition < 0.5
-        masked_video = init_video * cache['mask_tile']
+        if batch_size == 1:
+            masked_video = init_video * cache['mask_tile']
 
-        # 把预热的 cache 传给 encode
-        _, masked_video_latents = self.prepare_mask_latents(
-            None, masked_video, batch_size, height, width,
-            weight_dtype, device, generator, do_classifier_free_guidance,
-            noise_aug_strength=None,
-            K_skip=cache['K_zero'],
-            converged_mu=cache['converged_mu'],
-            converged_caches=cache['converged_caches'],
-        )
+            # 把预热的 cache 传给 encode
+            _, masked_video_latents = self.prepare_mask_latents(
+                None, masked_video, batch_size, height, width,
+                weight_dtype, device, generator, do_classifier_free_guidance,
+                noise_aug_strength=None,
+                K_skip=cache['K_zero'],
+                converged_mu=cache['converged_mu'],
+                converged_caches=cache['converged_caches'],
+            )
+        else:
+            # Encode one segment at a time using the shared endpoint mask and zero cache.
+            masked_video_latents = torch.cat([
+                self.encode_videos_streaming(
+                    sample.to(device=device, dtype=weight_dtype) * cache['mask_tile'],
+                    cache['K_zero'],
+                    converged_mu=cache['converged_mu'],
+                    converged_caches=cache['converged_caches'],
+                )
+                for sample in init_video.split(1)
+            ])
 
         if cache['mask_latents'] is None:
             cache['mask_latents'] = resize_mask(
                 1 - cache['mask_cond_for_latent'], masked_video_latents, True
             ).to(device, weight_dtype)
         mask_latents = cache['mask_latents']
+        if batch_size > 1:
+            mask_latents = mask_latents.expand(batch_size, -1, -1, -1, -1)
 
         return mask_condition, masked_video_latents, mask_latents
     
@@ -758,12 +779,11 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
 
         if control_image is not None:
             torch.cuda.synchronize(); t0 = time.time()
-            control_image = control_image.to(device=device, dtype=dtype)
             torch.cuda.synchronize(); t1 = time.time()
             bs = 1
             new_control_pixel_values = []
             for i in range(0, control_image.shape[0], bs):
-                control_pixel_values_bs = control_image[i : i + bs]
+                control_pixel_values_bs = control_image[i : i + bs].to(device=device, dtype=dtype)
                 # control_pixel_values_bs = self.vae.encode(control_pixel_values_bs)[0]
                 # control_pixel_values_bs = control_pixel_values_bs.mode()
                 control_pixel_values_bs = self.encode_videos_streaming(control_pixel_values_bs)
@@ -917,6 +937,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         decode_to_cpu: bool = True,
         mask_cache_video: Optional[torch.FloatTensor] = None,
         offload_vae: bool = True,
+        video_batch_size: int = 1,
     ) -> Union[WanPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -957,7 +978,15 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
         '''
-        batch_size = 1
+        batch_size = video_batch_size
+        if batch_size != 1:
+            if (batch_size != 2 or guidance_scale > 1 or low_vram
+                    or not isinstance(self.scheduler, FlowMatchEulerDiscreteScheduler)
+                    or any(x is None or x.shape[0] != batch_size
+                           for x in (video, control_video, ref_image))
+                    or any(x is None or x.shape[0] != 1 for x in (mask_video, mask_cache_video))
+                    or prompt_embeds is None or len(prompt_embeds) != batch_size):
+                raise ValueError("Batch 2 requires the Flow multi-image path with a shared endpoint mask")
 
         device = self._execution_device
         # Model weights may be FP8; video/latent/mask arithmetic and autocast
@@ -1101,7 +1130,8 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
 
             init_video = video * 2
             init_video.sub_(1)  # same rounded multiply/subtract, one fewer CPU temporary
-            init_video = init_video.to(device=device, dtype=weight_dtype)
+            if batch_size == 1:
+                init_video = init_video.to(device=device, dtype=weight_dtype)
         else:
             init_video = None
         print("input video:", time.time()-st_T)
@@ -1132,7 +1162,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         if mask_cache_video is not None:
             self._ensure_mask_cache(
                 mask_cache_video, mask_cache_video.shape[2], height, width,
-                batch_size, weight_dtype, device, batch_size)
+                1, weight_dtype, device, 1)
             mask_cache_video = None
         # _print_cuda_mem("before VAE preprocessing")
 
@@ -1402,6 +1432,9 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                         full_ref=full_ref,
                     )
 
+                if batch_size > 1 and noise_pred.shape != latent_model_input.shape:
+                    raise RuntimeError(f"Unexpected batched DiT output shape: {noise_pred.shape}")
+
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -1480,7 +1513,17 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
             _vae_to_gpu('decode')
             # _print_cuda_mem("VAE decode start")
             try:
-                video = self.decode_latents_streaming(latents, decode_to_cpu=decode_to_cpu)
+                if batch_size == 1:
+                    video = self.decode_latents_streaming(latents, decode_to_cpu=decode_to_cpu)
+                else:
+                    # Reuse the single-segment decoder without batching its caches.
+                    video = None
+                    for index, segment_latents in enumerate(latents.split(1)):
+                        decoded = self.decode_latents_streaming(segment_latents, decode_to_cpu=decode_to_cpu)
+                        if video is None:
+                            video = np.empty((batch_size, *decoded.shape[1:]), dtype=decoded.dtype)
+                        video[index] = decoded[0]
+                        del decoded
                 if output_type != "numpy":
                     video = self.video_processor.postprocess_video(
                         video=video,

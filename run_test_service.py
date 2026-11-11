@@ -42,6 +42,7 @@ if __name__ == "__main__":
                     "gen_vid_fps":30,
                     "video_offload":false,
                     "video_vae_offload":false,
+                    "video_batch_size":1,
                     "video_warmup_sizes":[[1920,1088]],
                 "world_size":2,
 
