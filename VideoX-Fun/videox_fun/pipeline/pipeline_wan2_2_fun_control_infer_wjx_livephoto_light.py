@@ -715,13 +715,14 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
 
         def _vae_to_gpu():
             target = torch.device(device)
-            if _vae_device() != target:
+            current = _vae_device()
+            if current != target:
                 if torch.cuda.is_available():
                     torch.cuda.synchronize(target)
                 self.vae.to(target)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize(target)
-            print(f"[VAE offload] VAE -> {_vae_device()}")
+                print(f"[LivePhoto VAE] moved {current} -> {target}")
 
         def _vae_to_cpu():
             if not offload_vae:
@@ -731,9 +732,9 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
                 if torch.cuda.is_available():
                     torch.cuda.synchronize(current)
                 self.vae.to("cpu")
+                print(f"[LivePhoto VAE] moved {current} -> cpu")
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            print(f"[VAE offload] VAE -> {_vae_device()}")
 
         def _print_cuda_mem(tag):
             if torch.cuda.is_available():
