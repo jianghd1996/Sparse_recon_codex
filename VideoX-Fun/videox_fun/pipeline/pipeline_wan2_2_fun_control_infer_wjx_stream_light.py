@@ -916,6 +916,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         low_vram: bool = True,
         decode_to_cpu: bool = True,
         mask_cache_video: Optional[torch.FloatTensor] = None,
+        offload_vae: bool = True,
     ) -> Union[WanPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -982,6 +983,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                 print(f"[VAE offload] warning: failed to remove VAE hooks: {e}")
             self._manual_vae_offload_initialized = True
 
+        offload_vae = offload_vae or low_vram
         if low_vram and hasattr(self.vae, 'enable_low_vram'):
             self.vae.enable_low_vram(cache_device=None, cpu_shortcut=False)
         elif hasattr(self.vae, 'disable_low_vram'):
@@ -994,8 +996,10 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                 return torch.device("cpu")
 
         def _vae_to_gpu(phase='encode'):
-            import gc
             target = torch.device(device)
+            if not offload_vae and _vae_device() == target:
+                return
+            import gc
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.synchronize(target)
@@ -1011,6 +1015,8 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
             # _print_cuda_mem(f'after VAE {phase} -> GPU')
 
         def _vae_to_cpu():
+            if not offload_vae:
+                return
             import gc
             # Encoder and decoder may reside on different devices. Checking only
             # the first parameter would miss a decoder still on CUDA.
@@ -1463,7 +1469,8 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         # Clear cached blocks before reloading the full VAE for decode.
         if torch.cuda.is_available():
             torch.cuda.synchronize(device)
-            torch.cuda.empty_cache()
+            if offload_vae:
+                torch.cuda.empty_cache()
         # _print_cuda_mem("after denoising / before VAE decode")
 
         st_T = time.time()

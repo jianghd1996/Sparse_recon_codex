@@ -105,7 +105,8 @@ class Wan_5b(object):
         GPU_memory_mode = (
             "model_cpu_offload" if getattr(args, "offload_model", False) else "model_full_load"
         )
-        logger.info(f"Wan memory mode: {GPU_memory_mode}")
+        self.offload_vae = getattr(args, "offload_vae", True) or GPU_memory_mode == "model_cpu_offload"
+        logger.info(f"Wan memory mode: {GPU_memory_mode}, VAE offload: {self.offload_vae}")
         weight_dtype        = torch.bfloat16
         ulysses_degree      = 1
         ring_degree         = 1 # zj_test multi card
@@ -578,6 +579,7 @@ class Wan_5b(object):
                     boundary = boundary,
                     shift = shift,
                     low_vram = False,
+                    offload_vae = self.offload_vae,
                 ).videos
                 infer_time = time.time()-st_T
                 logger.info(f"infer_time: {infer_time}s ")
