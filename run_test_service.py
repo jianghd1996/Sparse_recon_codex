@@ -41,7 +41,7 @@ if __name__ == "__main__":
                     "video_offload":false,
                 "world_size":2,
 
-                "run_3dgs_iter":false
+                "run_3dgs_iter":true
                 }"""
     
     if os.path.exists(json_str):
