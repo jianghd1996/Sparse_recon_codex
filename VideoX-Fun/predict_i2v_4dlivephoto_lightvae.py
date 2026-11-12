@@ -303,6 +303,7 @@ class Wan_5b(object):
         self.weight_dtype   = weight_dtype
 
     def infer(self, args, device='cuda'):
+        self.last_timings = {"segments": []}
         # ratio = min(args.img_size)/max(args.img_size)
         # if args.img_size[0] <= args.img_size[1]: # width <= height
         #     if ratio > 0.7:
@@ -380,6 +381,7 @@ class Wan_5b(object):
 
                 st_T = time.time()
                 input_image = get_image_for_latent(image_file, sample_size=sample_size)
+                image_prepare_s = time.time() - st_T
                 # print('### input_image:', input_image.shape, input_image.dtype, input_image.max(), input_image.min())
 
 
@@ -419,6 +421,11 @@ class Wan_5b(object):
                 save_videos_grid(sample, video_path, fps=fps, reverse_width=reverse_width)
                 save_vid_time = time.perf_counter() - save_started
                 logger.info(f"save gen vid: {save_vid_time}s")
+                self.last_timings["segments"].append({
+                    "segment_ids": [i + 1], "image_prepare_s": image_prepare_s,
+                    "inference_s": infer_time, "save_mp4_s": save_vid_time,
+                    **getattr(pipeline, "last_timings", {}),
+                })
 
 if __name__ == '__main__':
     # --- Argument Parsing ---
