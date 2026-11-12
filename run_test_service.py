@@ -17,6 +17,7 @@ import time
         use_enhance_crop: bool          画面中心增强
         use_view_extrapolation: bool    视角外插
     run_livephoto: bool             是否用livephoto进行视角扩充
+        livephoto_model_offload: bool  是否将 LivePhoto T5 和 DiT 卸载到 CPU
         livephoto_vae_offload: bool    是否在单次生成内将 VAE 卸载到 CPU
     run_gen_video: bool             是否进行视频生成
         video_offload: bool            多图 Wan 推理启用 CPU offload，默认关闭
@@ -36,6 +37,7 @@ if __name__ == "__main__":
                     "use_view_extrapolation":true,
 
                 "run_livephoto":false,
+                    "livephoto_model_offload":false,
                     "livephoto_vae_offload":false,
                 
                 "run_gen_video":true,

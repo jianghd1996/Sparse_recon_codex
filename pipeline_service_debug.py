@@ -110,10 +110,12 @@ class SparseRecon:
                 "sample_size_list": [],
                 "prompt_embed_path": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/prompt.pt"),
             }
+            livephoto_model_offload = getattr(self.args, "livephoto_model_offload", True)
             livephoto_vae_offload = getattr(self.args, "livephoto_vae_offload", True)
             params_A = {
+                "model_cpu_offload": livephoto_model_offload,
                 "offload_vae": livephoto_vae_offload,
-                "offload_model": not livephoto_vae_offload,
+                "offload_model": livephoto_model_offload and not livephoto_vae_offload,
                 "module_name": "VideoX-Fun.predict_i2v_4dlivephoto_lightvae",  
                 "class_name": "Wan_5b",                                 
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_4dlp_5b.yaml"),
@@ -315,13 +317,12 @@ class SparseRecon:
             if failed:
                 raise RuntimeError(f"[pool A] current case failed: {failed}")
         finally:
-            # An inference failure has already rebuilt and confirmed the new
-            # idle generation before returning. Keep it offloaded here too.
-            _, offload_failed = pool._offload_all_best_effort()
-            if offload_failed:
-                raise RuntimeError(f"[pool A] offload failed: {offload_failed}")
-        logger.info(f"livephoto generation + offload: {time.time() - st_T:.2f}s")
-        return None  # Caller already accepts an absent offload future.
+            _, cleanup_failed = pool._offload_all_best_effort()
+            if cleanup_failed:
+                raise RuntimeError(f"[pool A] cleanup failed: {cleanup_failed}")
+        cleanup_mode = "offload" if pool.model_params_dict["offload_model"] else "cache cleanup"
+        logger.info(f"livephoto generation + {cleanup_mode}: {time.time() - st_T:.2f}s")
+        return None  # Pool A cleanup completed synchronously.
 
     def _run_pool_B_gen_video(self, render_result, crop_image_path):
         """多图带引导信号：用 pool_B 生成 """

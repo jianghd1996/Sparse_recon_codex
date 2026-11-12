@@ -54,7 +54,10 @@ class Wan_5b(object):
     def __init__(self, args, device="cuda"):
         self.offload_vae = getattr(args, "offload_vae", True)
         logger.info(f"LivePhoto VAE offload within generation: {self.offload_vae} ({device})")
-        GPU_memory_mode     = "model_cpu_offload" # model_cpu_offload sequential_cpu_offload model_cpu_offload_and_qfloat8
+        GPU_memory_mode = (
+            "model_cpu_offload" if getattr(args, "model_cpu_offload", True) else "model_full_load"
+        )
+        logger.info(f"LivePhoto model memory mode: {GPU_memory_mode} ({device})")
         weight_dtype        = torch.bfloat16
         ulysses_degree      = 1
         ring_degree         = 1 # zj_test multi card
