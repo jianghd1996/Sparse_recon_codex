@@ -303,25 +303,10 @@ class Wan_5b(object):
         self.weight_dtype   = weight_dtype
 
     def infer(self, args, device='cuda'):
-        # ratio = min(args.img_size)/max(args.img_size)
-        # if args.img_size[0] <= args.img_size[1]: # width <= height
-        #     if ratio > 0.7:
-        #         sample_size = [1440, 1088]
-        #     elif ratio > 0.65:                                                                                                                                                                                           
-        #         sample_size = [1664, 1088]
-        #     else:
-        #         sample_size = [1664, 960] # [1280, 704] # [1920, 1088] [1664, 960]
-        # else:
-        #     if ratio > 0.7:
-        #         sample_size = [1088, 1440] # [960, 1280] # [1664, 960]
-        #     elif ratio > 0.65:
-        #         sample_size = [1088, 1664]
-        #     else:
-        #         sample_size = [960, 1664]
-        # if args.img_size[0] == args.img_size[1]:
-        #     sample_size = [1216, 1216]
-        # sample_size = [1440, 1088]
-        sample_size = [args.img_size[1], args.img_size[0]]
+        width, height = args.img_size
+        scale = min(1088 / min(width, height), 1664 / max(width, height))
+        # The pipeline expects [height, width] on a 32-pixel grid.
+        sample_size = [max(32, round(edge * scale / 32) * 32) for edge in (height, width)]
         print("sample size:", sample_size)
         vae = self.vae
         pipeline = self.pipeline
