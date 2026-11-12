@@ -94,15 +94,14 @@ class SparseRecon:
 
         total_gpus = self.world_size
         if self.args.run_livephoto:
-            from qwen_vl3_images_caption_multigpu_offload import ImagesCaptioner        
-            if self.world_size < 4:
-                img_captioner_gpu_num = self.world_size
-            else:
-                img_captioner_gpu_num = 4
-            self.img_captioner = ImagesCaptioner(
-                model_path=os.path.join(cur_py_path, "Cloud_Models/Qwen3-VL-8B-Instruct"),
-                num_gpus=img_captioner_gpu_num,
-            )
+            self.img_captioner = None
+            if getattr(self.args, "livephoto_captioner", True):
+                from qwen_vl3_images_caption_multigpu_offload import ImagesCaptioner
+
+                self.img_captioner = ImagesCaptioner(
+                    model_path=os.path.join(cur_py_path, "Cloud_Models/Qwen3-VL-8B-Instruct"),
+                    num_gpus=min(self.world_size, 4),
+                )
 
             # —— 模型 A：图片数 == 1 ——
             params_warmup_A = {
@@ -280,17 +279,15 @@ class SparseRecon:
     def _run_pool_A_livephoto(self, img_path, target_path, img_size):
         """单图前置：用 pool_A 生成 """
         pool = self.pool_A
-        
-        st_T = time.time()
-        # Caption first: do not overlap caption VRAM with pool A initialization/reload.
 
-        st_T = time.time()
-        output_text = self.img_captioner.read_image_caption(img_path)
-        print('### images caption:', output_text)
-        _cleanup_cuda()
-        calc_img_captioner_time = time.time() - st_T
-        logger.info(f"calc_img_captioner_time time: {calc_img_captioner_time}s")
-
+        output_text = ""
+        if self.img_captioner is not None:
+            st_T = time.time()
+            output_text = self.img_captioner.read_image_caption(img_path)
+            print('### images caption:', output_text)
+            _cleanup_cuda()
+            calc_img_captioner_time = time.time() - st_T
+            logger.info(f"calc_img_captioner_time time: {calc_img_captioner_time}s")
 
         if os.path.isdir(target_path):
             shutil.rmtree(target_path)
