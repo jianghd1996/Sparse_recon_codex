@@ -948,7 +948,6 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         Returns:
 
         """
-        self.last_timings = {}
         begin_T = time.time()
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
@@ -1135,8 +1134,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                 init_video = init_video.to(device=device, dtype=weight_dtype)
         else:
             init_video = None
-        self.last_timings["input_video_s"] = time.time() - st_T
-        print("input video:", self.last_timings["input_video_s"])
+        print("input video:", time.time()-st_T)
 
         st_T = time.time()
         latent_channels = self.vae.config.latent_channels
@@ -1267,8 +1265,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         else:
             control_video_latents = torch.zeros_like(latents).to(device, weight_dtype)
             control_camera_latents = None
-        self.last_timings["control_video_s"] = time.time() - st_T
-        print("control video:", self.last_timings["control_video_s"])
+        print("control video:", time.time()-st_T)
 
         st_T = time.time()
         if start_image is not None:
@@ -1321,8 +1318,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                 raise ValueError("The add_ref_conv is False, but ref_image is not None")
             else:
                 ref_image_latentes = None
-        self.last_timings["reference_images_s"] = time.time() - st_T
-        print("images:", self.last_timings["reference_images_s"])
+        print("images:", time.time()-st_T)
 
         # Only latent-sized tensors are needed for denoising from this point.
         has_init_video = init_video is not None
@@ -1354,8 +1350,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
         # 7. Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self.transformer.num_inference_steps = num_inference_steps
-        self.last_timings["prepare_s"] = time.time() - begin_T
-        print("total preparation:", self.last_timings["prepare_s"])
+        print("total preparation:", time.time()-begin_T)
 
         condition_parts = []
         if not has_camera_control:
@@ -1470,8 +1465,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                     progress_bar.update()
                 if comfyui_progressbar:
                     pbar.update(1)
-        self.last_timings["denoise_s"] = time.time() - st_T
-        print("denoising:", self.last_timings["denoise_s"])
+        print("denoising:", time.time()-st_T)
 
         condition_latents = condition_camera = condition_ref = None
         control_latents_input = control_camera_latents_input = full_ref = None
@@ -1541,8 +1535,7 @@ class Wan2_2FunControlPipeline_infer(DiffusionPipeline):
                 _vae_to_cpu()
                 # _print_cuda_mem("after VAE decode offload")
 
-        self.last_timings["decode_s"] = time.time() - st_T
-        print(output_type, "decode:", self.last_timings["decode_s"])
+        print(output_type, "decode:", time.time()-st_T)
 
         if not return_dict and isinstance(video, np.ndarray):
             video = torch.from_numpy(video)

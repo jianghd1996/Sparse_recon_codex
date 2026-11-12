@@ -519,7 +519,6 @@ class Wan_5b(object):
             log_host_memory("B worker task finished", logger)
 
     def _infer_impl(self, args, device, input_video_source):
-        self.last_timings = {"segments": []}
         # ratio = min(args.img_size)/max(args.img_size)
         # if args.img_size[0] <= args.img_size[1]: # width <= height
         #     if ratio > 0.7:
@@ -607,8 +606,7 @@ class Wan_5b(object):
                     )
                     inpaint_videos.append(video)
                     reference_images.append(get_image_latent(images[-1], sample_size=sample_size))
-                input_prepare_s = time.perf_counter() - st_T
-                logger.info(f"load control video time: {input_prepare_s:.3f}s")
+                logger.info(f"load control video time: {time.perf_counter() - st_T:.3f}s")
 
                 batch_size = len(segment_ids)
                 if batch_size == 2:
@@ -646,14 +644,7 @@ class Wan_5b(object):
                     offload_vae=self.offload_vae,
                     video_batch_size=batch_size,
                 ).videos
-                inference_s = time.perf_counter() - st_T
-                segment_timing = {
-                    "segment_ids": [i + 1 for i in segment_ids],
-                    "input_prepare_s": input_prepare_s, "inference_s": inference_s,
-                    **getattr(pipeline, "last_timings", {}),
-                }
-                self.last_timings["segments"].append(segment_timing)
-                logger.info(f"infer_time: {inference_s:.3f}s "
+                logger.info(f"infer_time: {time.perf_counter() - st_T:.3f}s "
                             f"(batch={batch_size}, segments={[i + 1 for i in segment_ids]})")
                 del input_video, inpaint_video, inpaint_mask, ref_image
 
@@ -665,9 +656,7 @@ class Wan_5b(object):
                     if save_img_ids is None:
                         video_path = os.path.join(save_path, f"{segment_id:08d}.mp4")
                         save_videos_grid(sample, video_path, fps=fps)
-                        save_s = time.perf_counter() - st_T
-                        segment_timing["save_mp4_s"] = segment_timing.get("save_mp4_s", 0.0) + save_s
-                        logger.info(f"save gen video: {save_s:.3f}s")
+                        logger.info(f"save gen video: {time.perf_counter() - st_T:.3f}s")
                     else:
                         save_selected_images_from_video_tensor(
                             videos=sample,
@@ -680,9 +669,7 @@ class Wan_5b(object):
                             n_rows=6,
                             use_global_name=True,
                         )
-                        save_s = time.perf_counter() - st_T
-                        segment_timing["save_jpg_s"] = segment_timing.get("save_jpg_s", 0.0) + save_s
-                        logger.info(f"save gen images: {save_s:.3f}s")
+                        logger.info(f"save gen images: {time.perf_counter() - st_T:.3f}s")
                     del sample
                 del samples
                 release_free_host_memory()

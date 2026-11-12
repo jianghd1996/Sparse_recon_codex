@@ -58,10 +58,7 @@ class SparseRecon:
 
         self.args = DictToObject(json_args)
 
-        self.startup_timings = {}
-        started = time.perf_counter()
         self.build_model()
-        self.startup_timings["total_s"] = time.perf_counter() - started
     
     def build_model(self,):
         cur_py_path = os.path.dirname(os.path.realpath(__file__))
@@ -73,17 +70,13 @@ class SparseRecon:
         if self.args.run_DA3:
             from DA3.run_da3_full_crop_dev import run_DA3
             DA3_model_path = os.path.join(cur_py_path, "Cloud_Models/Saliency-Face-DA3/besthumanmodel_lr1e_6_ckpt2.pt")
-            started = time.perf_counter()
             self.run_DA3 = run_DA3(DA3_model_path)
-            self.startup_timings["da3_init_s"] = time.perf_counter() - started
 
         if self.args.run_3dgs_iter:
 
             from Reconstruction_full import Reconstruction
             print("Load full Reconstruction version, support camera optimization")
-            started = time.perf_counter()
             self.recon_iter_full = Reconstruction(preload=True, dense_init_scene=False)
-            self.startup_timings["dense_3dgs_full_init_s"] = time.perf_counter() - started
                 # except:
                 #     project_root = str(Path(__file__).resolve().parent.parent)
                 #     sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"../../../dist_so/gaussian3d/third_party_envs"))
@@ -93,9 +86,7 @@ class SparseRecon:
 
             from Reconstruction import Reconstruction
             print("Load vanilla version")
-            started = time.perf_counter()
             self.recon_iter = Reconstruction(preload=True, dense_init_scene=False)
-            self.startup_timings["dense_3dgs_legacy_init_s"] = time.perf_counter() - started
 
         
         self.world_size = self.args.world_size
@@ -108,12 +99,10 @@ class SparseRecon:
                 img_captioner_gpu_num = self.world_size
             else:
                 img_captioner_gpu_num = 4
-            started = time.perf_counter()
             self.img_captioner = ImagesCaptioner(
                 model_path=os.path.join(cur_py_path, "Cloud_Models/Qwen3-VL-8B-Instruct"),
                 num_gpus=img_captioner_gpu_num,
             )
-            self.startup_timings["captioner_init_s"] = time.perf_counter() - started
 
             # —— 模型 A：图片数 == 1 ——
             params_warmup_A = {
@@ -153,9 +142,7 @@ class SparseRecon:
             self.pool_A = WorkerPool("A", pool_A_world_size, params_A, params_warmup_A, self.mp_ctx, device_ids=pool_A_device_ids)
             # self.pool_A.start()
             try:
-                started = time.perf_counter()
                 self.pool_A.start()
-                self.startup_timings["pool_a_startup_s"] = time.perf_counter() - started
             except Exception:
                 logger.error("pool A startup failed, cleaning up all workers...")
                 self.shutdown_workers()   # 会遍历 pool_A / pool_B 逐个 shutdown
@@ -199,8 +186,7 @@ class SparseRecon:
             startup_started = time.perf_counter()
             try:
                 self.pool_B.start()
-                self.startup_timings["pool_b_startup_s"] = time.perf_counter() - startup_started
-                logger.info(f"Pool B model startup (including warmup): {self.startup_timings['pool_b_startup_s']:.2f}s")
+                logger.info(f"Pool B model startup (including warmup): {time.perf_counter() - startup_started:.2f}s")
             except Exception:
                 logger.error("pool B startup failed, cleaning up all workers...")
                 self.shutdown_workers()   # 会遍历 pool_A / pool_B 逐个 shutdown
@@ -299,18 +285,10 @@ class SparseRecon:
         # Caption first: do not overlap caption VRAM with pool A initialization/reload.
 
         st_T = time.time()
-        timings = self.last_timings["livephoto"]
         output_text = self.img_captioner.read_image_caption(img_path)
         print('### images caption:', output_text)
-        cleanup_started = time.perf_counter()
         _cleanup_cuda()
         calc_img_captioner_time = time.time() - st_T
-        timings["captioner"] = {
-            **getattr(self.img_captioner, "last_timings", {}),
-            "outer_cleanup_s": time.perf_counter() - cleanup_started,
-            "total_s": calc_img_captioner_time,
-        }
-        logger.info(f"captioner breakdown: {timings['captioner']}")
         logger.info(f"calc_img_captioner_time time: {calc_img_captioner_time}s")
 
 
@@ -339,11 +317,7 @@ class SparseRecon:
             if failed:
                 raise RuntimeError(f"[pool A] current case failed: {failed}")
         finally:
-            timings["workers_wall_s"] = time.time() - st_T
-            timings["workers"] = pool.last_infer_timings
-            cleanup_started = time.perf_counter()
             _, cleanup_failed = pool._offload_all_best_effort()
-            timings["cleanup_s"] = time.perf_counter() - cleanup_started
             if cleanup_failed:
                 raise RuntimeError(f"[pool A] cleanup failed: {cleanup_failed}")
         cleanup_mode = "offload" if pool.model_params_dict["offload_model"] else "cache cleanup"
@@ -353,7 +327,6 @@ class SparseRecon:
     def _run_pool_B_gen_video(self, render_result, crop_image_path):
         """多图带引导信号：用 pool_B 生成 """
         pool = self.pool_B
-        timings = self.last_timings["gen_video"]
         logger.info(f"multi images input -> 使用 pool {pool.name}")
         # if os.path.isdir(gen_vid_path):
         #     shutil.rmtree(gen_vid_path)
@@ -362,19 +335,14 @@ class SparseRecon:
         gen_index = render_result.gen_index[0][:-1]
         frames = render_result.rendered_images
  
-        started = time.perf_counter()
         input_video, _, _, _ = get_video_to_video_latent_with_imgsize(frames, img_size=self.img_size, fps=self.args.gen_vid_fps, ref_image=None)
-        timings["control_tensor_s"] = time.perf_counter() - started
-        started = time.perf_counter()
         input_video = input_video.detach().cpu().contiguous().share_memory_()
-        timings["shared_memory_s"] = time.perf_counter() - started
         
         segment_index = []
         if self.save_necessary_only:
             st_T = time.time()
             segment_index = seg_index_sample(gen_index, self.colmap_path, num_frames=self.max_frames, video_length=self.args.view_num)
             colmap_sample_time = time.time() - st_T
-            timings["colmap_sampling_s"] = colmap_sample_time
             logger.info(f"colmap_camera_sampling took: {colmap_sample_time}s")
 
             img_extract_path = os.path.join(self.gen_vid_path, "image")
@@ -411,11 +379,8 @@ class SparseRecon:
                 raise RuntimeError(f"[pool B] current case failed: {failed}")
             logger.info(f"video generation: {time.time() - st_T:.2f}s")
         finally:
-            timings["workers_wall_s"] = time.time() - st_T
-            timings["workers"] = pool.last_infer_timings
             cleanup_started = time.perf_counter()
             _, offload_failed = pool._offload_all_best_effort()
-            timings["cleanup_s"] = time.perf_counter() - cleanup_started
             if offload_failed:
                 raise RuntimeError(f"[pool B] cleanup failed: {offload_failed}")
             cleanup_mode = "CPU offload" if getattr(self.args, "video_offload", False) else "cache cleanup"
@@ -453,7 +418,6 @@ class SparseRecon:
 
     def run_sparse_recon(self, work_dir:str, export_dir:str = None, mode:str='auto-scene'):
         # TODO: save_necessary_only set to False in default, if to use True, need adapt the Reconstruction module
-        self.last_timings = {}
         ffrecon_time = 0.0
         gen_vid_time = 0.0
         iter_3dgs_time = 0.0
@@ -475,14 +439,10 @@ class SparseRecon:
         cur_py_path = os.path.dirname(os.path.realpath(__file__))
         print(f"sparse pipeline at: {cur_py_path}")
 
-        image_timing = self.last_timings["input"] = {}
-        started = time.perf_counter()
+        # 预处理信息
         self.init_recon(work_dir)
-        image_timing["scan_s"] = time.perf_counter() - started
 
-        started = time.perf_counter()
         logger.info(align_images_resolution(self.img_path, os.path.join(work_dir, "image_ori")))
-        image_timing["align_resolution_s"] = time.perf_counter() - started
                 
         img1st = cv2.imread(os.path.join(self.img_path, self.list_imgs[0]))
         source_height, source_width, _ = img1st.shape
@@ -517,14 +477,10 @@ class SparseRecon:
             print(f"resize images for matching")
             img_resize_path = os.path.join(work_dir, "image_resize")
             # if not os.path.exists(img_resize_path):
-            started = time.perf_counter()
             resize_img(self.img_path, img_resize_path, self.img_size)
-            image_timing["resize_s"] = time.perf_counter() - started
             self.img_path = img_resize_path
 
         end_T = time.time()
-        image_timing["total_s"] = end_T - st_T_total
-        self.last_timings["inference_size_wh"] = [width, height]
         logger.info(f"initialization took time: {end_T-st_T_total}s")
 
         self.offload_A_future = None
@@ -534,7 +490,6 @@ class SparseRecon:
             # 用livephoto补充新视角
             if self.args.run_livephoto:
                 st_T = time.time()
-                self.last_timings["livephoto"] = {}
                 logger.info("run livephoto to augment images first")
                 self.offload_A_future = self._run_pool_A_livephoto(self.img_path, self.live_photo_video, self.img_size)
                 _cleanup_cuda()
@@ -543,12 +498,9 @@ class SparseRecon:
                 os.makedirs(self.live_photo_image, exist_ok=True)
                 os.system(f"rm -rf {self.live_photo_image}/*")
                 # 保存新视角
-                started = time.perf_counter()
                 insert_img_in_src(self.live_photo_video, self.live_photo_image, self.img_size[0], self.img_size[1], self.livephoto_vid_path, st_index = 61)
-                self.last_timings["livephoto"]["extract_views_s"] = time.perf_counter() - started
 
                 run_livephoto_time = time.time() - st_T
-                self.last_timings["livephoto"]["total_s"] = run_livephoto_time
                 logger.info(f"livephoto infer took: {run_livephoto_time}s")
 
             # os.makedirs(self.live_photo_image, exist_ok=True)
@@ -574,11 +526,9 @@ class SparseRecon:
         #   第一次得到crop ratio给到前馈式用于轨迹生成
         #   第二次对图像进行裁切，用于视频生成局部增强
         st_T = time.time()
-        crop_timing = self.last_timings["crop"] = {}
         if self.args.use_enhance_crop and not self.is_livephoto:
             crop_mask_path = os.path.join(work_dir, "crop_image_mask")
             os.makedirs(crop_mask_path, exist_ok=True)
-            started = time.perf_counter()
             try:
                 crop_ratio = get_crop_ratio_w_face_track(
                     self.img_path,
@@ -587,8 +537,6 @@ class SparseRecon:
                     self.face_detector,
                 )
             finally:
-                crop_timing["detect_and_track_s"] = time.perf_counter() - started
-                started = time.perf_counter()
                 self.seg_module.offload()
                 self.face_detector.offload()
 
@@ -602,11 +550,9 @@ class SparseRecon:
                         if device.type == "cuda":
                             with torch.cuda.device(device):
                                 torch.cuda.empty_cache()
-                crop_timing["cleanup_s"] = time.perf_counter() - started
             if crop_ratio > 0.9:
                 crop_ratio = 0.7
             
-            started = time.perf_counter()
             # for video gen
             crop_image_path = os.path.join(work_dir, "crop_image")
             os.makedirs(crop_image_path, exist_ok=True)
@@ -615,18 +561,15 @@ class SparseRecon:
                 os.system(f"cp {self.img_path}/{self.list_imgs[i]} {crop_image_path}/{i:05d}.jpg")
                 if crop_ratio < 1:
                     crop_image(f"{self.img_path}/{self.list_imgs[i]}", f"{crop_image_path}/{(i+len(self.list_imgs)):05d}.jpg", crop_ratio)
-            crop_timing["write_images_s"] = time.perf_counter() - started
         else:
             crop_ratio = 1
             crop_image_path = self.img_path
 
         end_T = time.time()
-        crop_timing["total_s"] = end_T - st_T
         logger.info(f"images cropping took time: {end_T-st_T}s")        
 
         logger.info("start estimate camera views...")
         st_T = time.time()
-        da3_timing = self.last_timings["da3"] = {}
         # run DA3
         if self.args.run_DA3:
             # os.makedirs(self.gs_render_path, exist_ok=True)
@@ -639,7 +582,6 @@ class SparseRecon:
                 crop_ratio: float
                 extra_view: list
 
-            started = time.perf_counter()
             render_result = self.run_DA3.infer(args=DA3Params(
                 data_path=self.img_path,
                 colmap_path=self.colmap_path,
@@ -648,7 +590,6 @@ class SparseRecon:
                 crop_ratio=crop_ratio,
                 extra_view=[self.args.use_view_extrapolation, self.is_livephoto] # 默认只有单图才走livephoto模式 
             ))
-            da3_timing["infer_render_export_s"] = time.perf_counter() - started
             gen_index, enhance = render_result.gen_index
             logger.info(f"gen_index: {gen_index}")
 
@@ -660,15 +601,11 @@ class SparseRecon:
                             gen_index[i][j][0] += len(self.list_imgs)
 
             # 持久化轨迹计划（含末尾circle标记），供 run_DA3=false 的分阶段重跑读取
-            started = time.perf_counter()
             with open(os.path.join(self.gs_render_path, "gen_index.json"), "w", encoding="utf-8") as f:
                 json.dump(gen_index, f, default=int)
-            da3_timing["save_trajectory_plan_s"] = time.perf_counter() - started
             circle = gen_index[-1]
 
-            started = time.perf_counter()
             _cleanup_cuda()
-            da3_timing["cleanup_s"] = time.perf_counter() - started
 
         elif (self.args.run_gen_video or self.args.run_3dgs):
             # 分阶段重跑：从磁盘读取上次 DA3 保存的轨迹计划
@@ -682,7 +619,6 @@ class SparseRecon:
             circle = gen_index[-1]
 
         ffrecon_time = time.time()-st_T
-        da3_timing["total_s"] = ffrecon_time
         logger.info(f"ffrecon took: {ffrecon_time}s")
 
         img_extract_path = os.path.join(self.gen_vid_path, "image")
@@ -690,21 +626,17 @@ class SparseRecon:
 
         self.offload_B_future = None
         if self.args.run_gen_video:
-            self.last_timings["gen_video"] = {}
             logger.info("run video gen to denoise gs_render video")
             st_T = time.time()     
             self.offload_B_future = self._run_pool_B_gen_video(render_result, crop_image_path)
 
             # 
             if not self.save_necessary_only:
-                started = time.perf_counter()
                 merge_videos(self.gen_vid_path, self.vid_path)
                 extract_images_from_vid(self.vid_path, img_extract_path, self.args.gen_vid_fps, self.img_size)
                 shutil.copytree(self.img_path, img_extract_path, dirs_exist_ok=True)
-                self.last_timings["gen_video"]["merge_and_extract_s"] = time.perf_counter() - started
             
             gen_vid_time = time.time() - st_T
-            self.last_timings["gen_video"]["total_s"] = gen_vid_time
             
         # os.makedirs(vid_colmap_path, exist_ok=True)
         # shutil.copytree(self.colmap_path, vid_colmap_path, dirs_exist_ok=True)
@@ -718,15 +650,8 @@ class SparseRecon:
             else:
                 mode = mode
                 self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=self.max_frames, use_exists_only=self.save_necessary_only)
-            train_s = time.time() - st_T
-            started = time.perf_counter()
             torch.cuda.empty_cache()
             iter_3dgs_time = time.time()-st_T
-            self.last_timings["dense_3dgs"] = {
-                "train_and_export_s": train_s,
-                "cleanup_s": time.perf_counter() - started,
-                "total_s": iter_3dgs_time,
-            }
             logger.info(f"iter3dgs videos took: {iter_3dgs_time}s")
             
 
@@ -735,8 +660,7 @@ class SparseRecon:
         logger.info(f"ffrecon took: {ffrecon_time}s")
         logger.info(f"gen vid took: {gen_vid_time}s")
         logger.info(f"iter 3dgs took: {iter_3dgs_time}s")
-        self.last_timings["total_s"] = time.time() - st_T_total
-        logger.info(f"sparse_recon took: {self.last_timings['total_s']}s in total")
+        logger.info(f"sparse_recon took: {time.time()-st_T_total}s in total")
 
         if self.offload_A_future is not None:
             self.offload_A_future.result()

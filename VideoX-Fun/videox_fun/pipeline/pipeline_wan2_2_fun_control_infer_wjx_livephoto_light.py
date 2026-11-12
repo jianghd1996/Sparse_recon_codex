@@ -653,7 +653,6 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
         Returns:
 
         """
-        self.last_timings = {}
         begin_T = time.time()
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
@@ -959,8 +958,7 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
         # 7. Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self.transformer.num_inference_steps = num_inference_steps
-        self.last_timings["prepare_s"] = time.time() - begin_T
-        print("latents preparation time:", self.last_timings["prepare_s"])
+        print("latents preparation time:", time.time()-begin_T)
 
         st_T = time.time()
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -1032,8 +1030,7 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
                     progress_bar.update()
                 if comfyui_progressbar:
                     pbar.update(1)
-        self.last_timings["denoise_s"] = time.time() - st_T
-        print("denoising:", self.last_timings["denoise_s"])
+        print("denoising:", time.time()-st_T)
         latents = latents[:,:,:real_latent_length]
 
         # Transformer remains managed by sequential-offload hooks.
@@ -1063,8 +1060,7 @@ class Wan2_2LivePhotoPipeline_infer(DiffusionPipeline):
                 _vae_to_cpu()
                 # _print_cuda_mem("after VAE decode offload")
 
-        self.last_timings["decode_s"] = time.time() - st_T
-        print("unpatchify:", self.last_timings["decode_s"])
+        print("unpatchify:", time.time()-st_T)
 
         if not return_dict:
             video = torch.from_numpy(video)

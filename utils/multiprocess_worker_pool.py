@@ -168,7 +168,7 @@ class WorkerPool:
         q._reader.close()
 
     def _wait_results(self, expected_status, timeout_per_get, expected_ranks=None,
-                      *, request_id="init", timings=None):
+                      *, request_id="init"):
         # timeout_per_get is retained for API compatibility. It is now the
         # TOTAL phase deadline and is never reset by a response/stale message.
         pending = set(range(self.world_size) if expected_ranks is None else expected_ranks)
@@ -210,8 +210,6 @@ class WorkerPool:
             pending.remove(rank)
             if message.get("status") == expected_status:
                 ok.add(rank)
-                if timings is not None and "timings" in message:
-                    timings[rank] = message["timings"]
             else:
                 failed[rank] = (message.get("status", "error"), message.get("error"))
                 break
@@ -295,10 +293,7 @@ class WorkerPool:
                                   device_id=self.device_ids[rank], cuda_id=self.device_ids[rank])
                 q.put({"generation": self._generation, "request_id": request_id,
                        "command": command, "payload": params})
-            ok, failed = self._wait_results(
-                expected_status, timeout, request_id=request_id,
-                timings=self.last_infer_timings if command == "infer" else None,
-            )
+            ok, failed = self._wait_results(expected_status, timeout, request_id=request_id)
         except Exception as exc:
             ok = set()
             failed = {r: ("dispatch_error", str(exc)) for r in range(self.world_size)}
@@ -340,7 +335,6 @@ class WorkerPool:
         # command restores excluded components and resets peak stats itself;
         # model_cpu_offload hooks handle the remaining onloads at forward.
         with self._lock:
-            self.last_infer_timings = {}
             self._ensure_workers_alive()
             return self._rpc_locked("infer", infer_params_dict, "done", self.result_get_timeout)
 
@@ -509,22 +503,18 @@ def persistent_worker_fn(rank, world_size, device_id, model_params_dict,
         os.environ[key] = os.path.expanduser(path)
         os.makedirs(os.environ[key], exist_ok=True)
 
-    def reply(request_id, status, error=None, timings=None):
+    def reply(request_id, status, error=None):
         if error:
             print(f"[pool {pool_name} rank={rank} pid={os.getpid()}] {status}:\n{error}",
                   file=sys.stderr, flush=True)
             error = error.encode("utf-8")[-2048:].decode("utf-8", errors="replace")
         response = dict(generation=generation, request_id=request_id,
                         rank=rank, status=status, error=error)
-        if timings is not None:
-            response["timings"] = timings
         # Linux status messages fit in PIPE_BUF (4096 bytes including framing).
         # Queue uses a single write for this size; a writer killed mid-response
         # cannot leave a large partial frame blocking the parent's recv.
         if len(pickle.dumps(response, protocol=4)) > 3500:
-            response.pop("timings", None)
-            if error:
-                response["error"] = "worker failed; see worker stderr for traceback"
+            response["error"] = "worker failed; see worker stderr for traceback"
         result_queue.put(response)
 
     model = None
@@ -565,20 +555,13 @@ def persistent_worker_fn(rank, world_size, device_id, model_params_dict,
             command = message.get("command")
             if command == "stop":
                 break
-            started = time.perf_counter()
             status, error = _run_command(
                 model, command, message.get("payload"), device_id,
                 offload_model=model_params_dict.get("offload_model", False),
             )
             request_id = message.get("request_id")
             message = None  # Release this request's shared input references.
-            timings = None
-            if command == "infer" and status == "done":
-                timings = dict(getattr(model, "last_timings", {}))
-                timings["wall_s"] = time.perf_counter() - started
-                timings["device_id"] = device_id
-                timings["peak_alloc_gib"] = torch.cuda.max_memory_allocated(device_id) / 1024**3
-            reply(request_id, status, error, timings)
+            reply(request_id, status, error)
             if status in {"oom", "error"}:
                 # A fresh worker is safer than reusing a partially executed
                 # model/offload/collective state after an inference exception.

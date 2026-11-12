@@ -319,6 +319,7 @@ class ImagesCaptioner:
                 started = time.perf_counter()
                 self.offload()
                 self.last_timings["offload_s"] = time.perf_counter() - started
+            print(f"[caption timing] {json.dumps(self.last_timings)}", flush=True)
 
     def _generate(self, image_folder, max_side, max_pixels, max_new_tokens):
         inputs = generated_ids = trimmed = None
