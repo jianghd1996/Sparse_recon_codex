@@ -37,17 +37,17 @@ if __name__ == "__main__":
                     "use_enhance_crop":false,
                     "use_view_extrapolation":true,
 
-                "run_livephoto":false,
+                "run_livephoto":true,
                     "livephoto_captioner":false,
-                    "livephoto_model_offload":false,
-                    "livephoto_vae_offload":false,
+                    "livephoto_model_offload":true,
+                    "livephoto_vae_offload":true,
                 
                 "run_gen_video":true,
                     "view_num":81,
                     "gen_vid_infer_step":6,
                     "gen_vid_fps":30,
-                    "video_offload":false,
-                    "video_vae_offload":false,
+                    "video_offload":true,
+                    "video_vae_offload":true,
                     "video_batch_size":1,
                     "video_warmup_sizes":[[1920,1088]],
                 "world_size":2,
@@ -66,9 +66,9 @@ if __name__ == "__main__":
 
     skip_list = []
     # work_dir = "/mnt/DataPart/PrivateSpace/wujinxiao/00_data/00_0829_synchaisi_image"
-    work_dir = "/home/z00566689/dev/mnt/jiang_test/00_1110_multi_res_time_test/multi_image"
+    work_dir = "/home/z00566689/dev/mnt/jiang_test/00_1110_multi_res_time_test/single_image"
     run_list = os.listdir(work_dir)
-    run_list = ["2160x3840"]
+    run_list = ["2160x2160"]
 
     for item in sorted(os.listdir(work_dir)):
         if len(run_list) != 0 and item not in run_list:
