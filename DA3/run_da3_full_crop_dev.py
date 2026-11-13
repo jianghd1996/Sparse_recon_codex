@@ -278,17 +278,21 @@ def save_sparserecon(prediction, render_result, images_paths, colmap_path, view_
         intrinsic_cp[idx] = default_intrinsic[idx]
         ori_intrinsic_cp[idx] = ori_intrinsic[idx]
 
-    # torch: N*3*4, N*3*3
-    extrinsic_render = render_result.extrinsics
-    gen_index, enhance = render_result.gen_index
-    intrinsic_render = interpolate_intrinsics_sparse_view(ori_intrinsic_cp, gen_index[:-1], view_num)
-    for i in range(len(enhance)):
-        if enhance[i] == 1:
-            st = i * view_num
-            ed = (i+1) * view_num
-            for k in range(st, ed):
-                intrinsic_render[k][0][0] /= crop_ratio
-                intrinsic_render[k][1][1] /= crop_ratio
+    extr = extrinsic_cp
+    intr = ori_intrinsic_cp
+    if render_result is not None:
+        extrinsic_render = render_result.extrinsics
+        gen_index, enhance = render_result.gen_index
+        intrinsic_render = interpolate_intrinsics_sparse_view(ori_intrinsic_cp, gen_index[:-1], view_num)
+        for i in range(len(enhance)):
+            if enhance[i] == 1:
+                st = i * view_num
+                ed = (i+1) * view_num
+                for k in range(st, ed):
+                    intrinsic_render[k][0][0] /= crop_ratio
+                    intrinsic_render[k][1][1] /= crop_ratio
+        extr = np.concatenate((extrinsic_cp, extrinsic_render), 0)
+        intr = np.concatenate((ori_intrinsic_cp, intrinsic_render), 0)
 
     points_xyf = create_pixel_coordinate_grid(num_frames, height, width)
 
@@ -302,15 +306,12 @@ def save_sparserecon(prediction, render_result, images_paths, colmap_path, view_
     points_xyf = points_xyf[masks]
     points_rgb = processed_images[masks]
 
-    extr = np.concatenate((extrinsic_cp, extrinsic_render), 0)
-    intr = np.concatenate((ori_intrinsic_cp, intrinsic_render), 0)
-
     # print(points_3d.shape, points_rgb.shape, extr.shape, intr.shape)
     # print(points_3d[0], points_rgb[0], extr[0], intr[0])
 
     # logger.info("Converting to COLMAP format")
     reconstruction = batch_np_matrix_to_pycolmap_wo_track(points_3d, points_xyf, points_rgb, extr, intr,
-                                                          (ori_resolution[0], ori_resolution[1]), image_names, use_new_view=True,\
+                                                          (ori_resolution[0], ori_resolution[1]), image_names, use_new_view=render_result is not None,\
                                                            shared_camera=False, camera_type="PINHOLE")
 
     # logger.info(f"Saving reconstruction to {colmap_path}")
@@ -359,11 +360,21 @@ class run_DA3(object):
         logger.info(f"load DA3 to gpu. Time: {end_time - start_time} seconds")
 
         start_time = time.time()
-        prediction, render_result = self.model.inference(
-            images, export_dir = gs_render_path, infer_gs=True, export_format='gs_video', use_ray_pose=True, process_res=540, 
-            crop_ratio=args.crop_ratio, view_num=args.view_num, extra_view = extra_view)
+        if gs_render_path is None:
+            result = self.model.inference(
+                images, export_dir=None, infer_gs=True, use_ray_pose=True, process_res=540,
+            )
+            # The local service and upstream DA3 differ in their return shape.
+            prediction = result[0] if isinstance(result, tuple) else result
+            render_result = None
+            del result
+        else:
+            prediction, render_result = self.model.inference(
+                images, export_dir = gs_render_path, infer_gs=True, export_format='gs_video', use_ray_pose=True, process_res=540,
+                crop_ratio=args.crop_ratio, view_num=args.view_num, extra_view = extra_view)
         end_time = time.time()
-        logger.info(f"Forward and Rendering DONE. Time: {end_time - start_time} seconds")
+        stage = "Forward" if gs_render_path is None else "Forward and Rendering"
+        logger.info(f"{stage} DONE. Time: {end_time - start_time} seconds")
 
         start_time = time.time()
         save_sparserecon(prediction, render_result, images, colmap_path, args.view_num, args.crop_ratio)

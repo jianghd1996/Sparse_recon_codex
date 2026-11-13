@@ -23,7 +23,7 @@ from utils.utils import DictToObject
 class DA3Params:
     data_path: str
     colmap_path: str
-    gs_render_path: str
+    gs_render_path: str | None
     view_num: int
     crop_ratio: float
     extra_view: list
@@ -166,7 +166,6 @@ class SparseRecon:
         gen_vid_path = run_dir / "gen_video"
         image_path = gen_vid_path / "image"
         colmap_path = gen_vid_path / "sparse" / "0"
-        gs_render_path = run_dir / "3dgs_render"
         export_dir = Path(export_dir).resolve() if export_dir is not None else run_dir / "export"
         image_path.mkdir(parents=True)
         logger.info("Single TI2V work directory: {}", run_dir)
@@ -178,12 +177,12 @@ class SparseRecon:
             if {path.name for path in image_path.iterdir()} != expected_names:
                 raise RuntimeError(f"TI2V did not save the expected sampled frames in {image_path}")
             if self.args.run_DA3:
-                circle = self._run_da3(image_path, colmap_path, gs_render_path, expected_names)
+                self._run_da3(image_path, colmap_path, expected_names)
             if self.args.run_3dgs_iter:
                 stage_started = time.perf_counter()
                 export_dir.mkdir(parents=True, exist_ok=True)
                 self.recon_iter_full(
-                    work_dir=gen_vid_path, export_dir=export_dir, mode=mode, circle=circle,
+                    work_dir=gen_vid_path, export_dir=export_dir, mode=mode, circle=False,
                     max_frames=len(self.frame_indices), use_exists_only=True,
                 )
                 for filename in ("point_cloud_final.ply", "gs_camera_params_final.json"):
@@ -226,35 +225,21 @@ class SparseRecon:
             raise RuntimeError(f"TI2V worker cleanup failed: {cleanup_failed}")
         logger.info("TI2V generation and cleanup took: {:.2f}s", time.perf_counter() - started)
 
-    def _run_da3(self, image_path, colmap_path, gs_render_path, expected_names):
+    def _run_da3(self, image_path, colmap_path, expected_names):
         colmap_path.mkdir(parents=True)
-        gs_render_path.mkdir()
         started = time.perf_counter()
-        render_result = self.run_DA3.infer(args=DA3Params(
+        self.run_DA3.infer(args=DA3Params(
             data_path=str(image_path), colmap_path=str(colmap_path),
-            # This controls the legacy render plan, not the number of input images.
-            gs_render_path=str(gs_render_path), view_num=81,
-            crop_ratio=1.0, extra_view=[False, False],
+            gs_render_path=None, view_num=81, crop_ratio=1.0, extra_view=[False, False],
         ))
-        if self.args.run_3dgs_iter:
-            gen_index, _ = render_result.gen_index
-            if len(gen_index) == 0:
-                raise RuntimeError("DA3 did not return the circle flag required by Reconstruction_full")
-            circle = gen_index[-1]
-        else:
-            circle = None
-        del render_result
         _cleanup_cuda()
         logger.info("ffrecon took: {:.2f}s", time.perf_counter() - started)
 
         for stem in ("cameras", "images", "points3D"):
             if not any((colmap_path / f"{stem}.{ext}").is_file() for ext in ("bin", "txt")):
                 raise RuntimeError(f"DA3 did not export COLMAP {stem} to {colmap_path}")
-        missing_names = expected_names - _colmap_image_names(colmap_path)
-        if missing_names:
-            raise RuntimeError(
-                f"DA3 COLMAP export lacks {len(missing_names)} sampled images "
-                f"(first: {', '.join(sorted(missing_names)[:5])}). "
-                "The local DA3 wrapper must export cameras for the sampled input filenames."
-            )
-        return circle
+        actual_names = _colmap_image_names(colmap_path)
+        if actual_names != expected_names:
+            missing = sorted(expected_names - actual_names)
+            extra = sorted(actual_names - expected_names)
+            raise RuntimeError(f"DA3 COLMAP frame mismatch: missing={missing}, extra={extra}")
