@@ -25,7 +25,7 @@ if __name__ == "__main__":
     recon = SparseRecon(json_args)
 
     skip_list = []
-    work_dir = "/path/to/single_image_cases"
+    work_dir = "/mnt/DataPart/PrivateSpace/jianghongda/data/00_1112_multi_res_time_test/single_image"
     run_list = []  # 空列表跑全部 case，例如 ["2160x3840"] 只跑一个
 
     for item in sorted(os.listdir(work_dir)):

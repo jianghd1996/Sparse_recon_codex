@@ -68,7 +68,7 @@ def _colmap_image_names(colmap_path):
 
 DEFAULT_TI2V_CONFIG = {
     # Set this to the checkpoint for the 121-frame TI2V model.
-    "lora_path": "/path/to/ti2v.safetensors",
+    "lora_path": "Cloud_Models/Wan2.2-TI2V-5B/lora_ckpts_single8/checkpoint-9600.safetensors",
     "lora_weight": 0.55,
     "model_cpu_offload": True,
     "video_length": 121,
