@@ -96,8 +96,12 @@ class SparseRecon:
         model_params = {
             "module_name": "VideoX-Fun.predict_ti2v_single",
             "class_name": "Wan_5b",
-            "config_path": self.args.config_path,
-            "model_name": self.args.model_name,
+            "config_path": getattr(self.args, "config_path", str(
+                cur_py_path / "VideoX-Fun/config/wan2.2/wan_ti2v_single_5b.yaml"
+            )),
+            "model_name": getattr(self.args, "model_name", str(
+                cur_py_path / "Cloud_Models/Wan2.2-TI2V-5B"
+            )),
             "lora_path": self.args.lora_path,
             "lora_weight": self.args.lora_weight,
             "model_cpu_offload": self.args.model_cpu_offload,
@@ -105,7 +109,7 @@ class SparseRecon:
         }
         self.pool_A = WorkerPool(
             "TI2V", 1, model_params, {"sample_size_list": []}, mp.get_context("spawn"),
-            device_ids=[self.args.device_id],
+            device_ids=[getattr(self.args, "device_id", 0)],
         )
         try:
             self.pool_A.start()

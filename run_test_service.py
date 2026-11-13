@@ -16,9 +16,6 @@ if __name__ == "__main__":
 
                 "lora_path":"/path/to/ti2v.safetensors",
                 "lora_weight":0.55,
-                "model_name":"Cloud_Models/Wan2.2-TI2V-5B",
-                "config_path":"VideoX-Fun/config/wan2.2/wan_ti2v_single_5b.yaml",
-                "device_id":0,
                 "model_cpu_offload":true,
 
                 "video_length":121,
