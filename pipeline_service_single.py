@@ -4,11 +4,11 @@ os.environ["MKL_THREADING_LAYER"] = "GNU"
 
 import atexit
 import json
+import shutil
 import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import mkdtemp
 
 import cv2
 import torch
@@ -161,13 +161,16 @@ class SparseRecon:
         height, width = source.shape[:2]
         del source
 
-        run_root = work_dir / "single_ti2v"
-        run_root.mkdir(exist_ok=True)
-        run_dir = Path(mkdtemp(prefix="run_", dir=run_root))
+        run_dir = work_dir / "single_ti2v"
+        if run_dir.exists():
+            shutil.rmtree(run_dir)
         gen_vid_path = run_dir / "gen_video"
         image_path = gen_vid_path / "image"
         colmap_path = gen_vid_path / "sparse" / "0"
         export_dir = Path(export_dir).resolve() if export_dir is not None else run_dir / "export"
+        case_export_dir = work_dir / "export"
+        if export_dir == case_export_dir and case_export_dir.exists():
+            shutil.rmtree(case_export_dir)
         image_path.mkdir(parents=True)
         logger.info("Single TI2V work directory: {}", run_dir)
         run_dir_log_id = logger.add(run_dir / "pipeline.log")
