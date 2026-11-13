@@ -360,7 +360,7 @@ class run_DA3(object):
 
         start_time = time.time()
         prediction, render_result = self.model.inference(
-            images, export_dir = gs_render_path, infer_gs=True, export_format='gs_video', use_ray_pose=True, process_res=840, 
+            images, export_dir = gs_render_path, infer_gs=True, export_format='gs_video', use_ray_pose=True, process_res=540, 
             crop_ratio=args.crop_ratio, view_num=args.view_num, extra_view = extra_view)
         end_time = time.time()
         logger.info(f"Forward and Rendering DONE. Time: {end_time - start_time} seconds")
