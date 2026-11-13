@@ -66,13 +66,32 @@ def _colmap_image_names(colmap_path):
     return names
 
 
+DEFAULT_TI2V_CONFIG = {
+    # Set this to the checkpoint for the 121-frame TI2V model.
+    "lora_path": "/path/to/ti2v.safetensors",
+    "lora_weight": 0.55,
+    "model_cpu_offload": True,
+    "video_length": 121,
+    "video_fps": 24,
+    "sample_count": 40,
+    "num_inference_steps": 50,
+    "guidance_scale": 6.0,
+    "shift": 5.0,
+    "seed": 43,
+    "short_edge": 704,
+    "long_edge": 1280,
+    "prompt": "",
+    "negative_prompt": "",
+}
+
+
 class SparseRecon:
     """One input image, one TI2V clip, DA3 and iterative 3DGS."""
 
     def __init__(self, json_args):
         if type(json_args) != dict:
             json_args = json.loads(json_args)
-        self.args = DictToObject(json_args)
+        self.args = DictToObject({**DEFAULT_TI2V_CONFIG, **json_args})
         self.frame_indices = sample_frame_indices(self.args.video_length, self.args.sample_count)
         if (self.args.video_length - 1) % 4:
             raise ValueError("Wan2.2 TI2V requires a video length of 1 + n * 4")

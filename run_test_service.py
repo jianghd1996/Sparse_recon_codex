@@ -5,30 +5,14 @@ from pipeline_service_single import SparseRecon
 import json
 '''
     work_dir 下每个 case 的 image/ 放一张输入图。
-    lora_path 指向 121 帧 TI2V LoRA。
+    在 pipeline_service_single.py 中设置 121 帧 TI2V 的 lora_path。
     run_DA3 和 run_3dgs_iter 都设为 false 时只生成视频和采样帧。
 '''
 
 if __name__ == "__main__":
     json_str="""{
                 "run_DA3":true,
-                "run_3dgs_iter":true,
-
-                "lora_path":"/path/to/ti2v.safetensors",
-                "lora_weight":0.55,
-                "model_cpu_offload":true,
-
-                "video_length":121,
-                "video_fps":24,
-                "sample_count":40,
-                "num_inference_steps":50,
-                "guidance_scale":6.0,
-                "shift":5.0,
-                "seed":43,
-                "short_edge":704,
-                "long_edge":1280,
-                "prompt":"",
-                "negative_prompt":""
+                "run_3dgs_iter":true
                 }"""
 
     if os.path.exists(json_str):
