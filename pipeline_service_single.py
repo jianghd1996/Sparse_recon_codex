@@ -74,7 +74,7 @@ DEFAULT_TI2V_CONFIG = {
     "video_length": 121,
     "video_fps": 24,
     "sample_count": 40,
-    "num_inference_steps": 50,
+    "num_inference_steps": 8,
     "guidance_scale": 6.0,
     "shift": 5.0,
     "seed": 43,
