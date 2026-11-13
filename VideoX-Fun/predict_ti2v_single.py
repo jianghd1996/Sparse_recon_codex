@@ -14,7 +14,7 @@ if video_x_fun_root not in sys.path:
 from videox_fun.models import AutoencoderKLWan3_8, AutoTokenizer, Wan2_2Transformer3DModel, WanT5EncoderModel
 from videox_fun.pipeline.pipeline_wan2_2_ti2v_single import Wan2_2TI2VPipeline
 from videox_fun.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-from videox_fun.utils.lora_utils import merge_lora
+from videox_fun.utils.lora_utils_new import merge_lora
 from videox_fun.utils.utils_new import filter_kwargs, get_image_to_video_latent
 
 
