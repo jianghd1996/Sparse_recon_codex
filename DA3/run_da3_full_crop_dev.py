@@ -373,8 +373,8 @@ class run_DA3(object):
                 images, export_dir = gs_render_path, infer_gs=True, export_format='gs_video', use_ray_pose=True, process_res=540,
                 crop_ratio=args.crop_ratio, view_num=args.view_num, extra_view = extra_view)
         end_time = time.time()
-        stage = "Forward" if gs_render_path is None else "Forward and Rendering"
-        logger.info(f"{stage} DONE. Time: {end_time - start_time} seconds")
+        stage = "Model Forward Pass Done" if gs_render_path is None else "Forward and Rendering DONE"
+        logger.info(f"{stage}. Time: {end_time - start_time} seconds")
 
         start_time = time.time()
         save_sparserecon(prediction, render_result, images, colmap_path, args.view_num, args.crop_ratio)

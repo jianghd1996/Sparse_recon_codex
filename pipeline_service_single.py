@@ -147,6 +147,7 @@ class SparseRecon:
         return self.run_sparse_recon(work_dir, export_dir, mode)
 
     def run_sparse_recon(self, work_dir: str, export_dir: str = None, mode: str = "scene"):
+        started = time.perf_counter()
         work_dir = Path(work_dir).resolve()
         sources = sorted(
             path for path in (work_dir / "image").iterdir()
@@ -170,14 +171,20 @@ class SparseRecon:
         image_path.mkdir(parents=True)
         logger.info("Single TI2V work directory: {}", run_dir)
         run_dir_log_id = logger.add(run_dir / "pipeline.log")
-        started = time.perf_counter()
+        ffrecon_time = 0.0
+        iter_3dgs_time = 0.0
         try:
+            stage_started = time.perf_counter()
             self._run_ti2v(sources[0], gen_vid_path, (width, height))
+            gen_vid_time = time.perf_counter() - stage_started
             expected_names = {f"{index:05d}.png" for index in self.frame_indices}
             if {path.name for path in image_path.iterdir()} != expected_names:
                 raise RuntimeError(f"TI2V did not save the expected sampled frames in {image_path}")
             if self.args.run_DA3:
+                logger.info("start estimate camera views...")
+                stage_started = time.perf_counter()
                 self._run_da3(image_path, colmap_path, expected_names)
+                ffrecon_time = time.perf_counter() - stage_started
             if self.args.run_3dgs_iter:
                 stage_started = time.perf_counter()
                 export_dir.mkdir(parents=True, exist_ok=True)
@@ -189,7 +196,12 @@ class SparseRecon:
                     if not (export_dir / filename).is_file():
                         raise RuntimeError(f"Reconstruction did not export {export_dir / filename}")
                 torch.cuda.empty_cache()
-                logger.info("iter 3dgs took: {:.2f}s", time.perf_counter() - stage_started)
+                iter_3dgs_time = time.perf_counter() - stage_started
+
+            logger.info("-------total elapsed time-------")
+            logger.info("ffrecon took: {:.2f}s", ffrecon_time)
+            logger.info("gen vid took: {:.2f}s", gen_vid_time)
+            logger.info("iter 3dgs took: {:.2f}s", iter_3dgs_time)
             logger.info("sparse_recon took: {:.2f}s in total", time.perf_counter() - started)
             return export_dir if self.args.run_3dgs_iter else run_dir
         finally:
@@ -227,13 +239,11 @@ class SparseRecon:
 
     def _run_da3(self, image_path, colmap_path, expected_names):
         colmap_path.mkdir(parents=True)
-        started = time.perf_counter()
         self.run_DA3.infer(args=DA3Params(
             data_path=str(image_path), colmap_path=str(colmap_path),
             gs_render_path=None, view_num=81, crop_ratio=1.0, extra_view=[False, False],
         ))
         _cleanup_cuda()
-        logger.info("ffrecon took: {:.2f}s", time.perf_counter() - started)
 
         for stem in ("cameras", "images", "points3D"):
             if not any((colmap_path / f"{stem}.{ext}").is_file() for ext in ("bin", "txt")):
