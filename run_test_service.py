@@ -1,85 +1,78 @@
-import os
+import argparse
+from pathlib import Path
 
-from pipeline_service_debug import SparseRecon
-# from pipeline_jiang3_debug import SparseRecon
 
-import json
-import time
+def parse_args():
+    repo_root = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(description="Run single-image TI2V reconstruction")
+    parser.add_argument("work_dir", type=Path, help="Case directory with image/, or a directory of cases")
+    parser.add_argument("--case", action="append", help="Run only this case when given a directory of cases")
+    parser.add_argument("--lora", dest="lora_path", type=Path, required=True)
+    parser.add_argument("--lora-weight", type=float, default=0.55)
+    parser.add_argument("--model-name", type=Path, default=repo_root / "Cloud_Models/Wan2.2-TI2V-5B")
+    parser.add_argument("--config-path", type=Path, default=repo_root / "VideoX-Fun/config/wan2.2/wan_ti2v_single_5b.yaml")
+    parser.add_argument("--device-id", type=int, default=0, help="TI2V device index after CUDA_VISIBLE_DEVICES")
+    parser.add_argument("--model-cpu-offload", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--prompt", default="")
+    parser.add_argument("--negative-prompt", default="")
+    parser.add_argument("--guidance-scale", type=float, default=6.0)
+    parser.add_argument("--steps", dest="num_inference_steps", type=int, default=50)
+    parser.add_argument("--shift", type=float, default=5.0)
+    parser.add_argument("--seed", type=int, default=43)
+    parser.add_argument("--short-edge", type=int, default=704)
+    parser.add_argument("--long-edge", type=int, default=1280)
+    parser.add_argument("--video-length", type=int, default=121)
+    parser.add_argument("--video-fps", type=int, default=24)
+    parser.add_argument("--sample-count", type=int, default=40)
+    parser.add_argument("--stage", choices=("video", "pose", "full"), default="full")
+    args = parser.parse_args()
 
-# pose_method = pi3 or vggt or data_verify
-# CUDA_VISIBLE_DEVICES=4,5,6,7 python run_vid_gen_single_zj_test_new_V008.py 
+    if not args.lora_path.is_file():
+        parser.error(f"LoRA checkpoint does not exist: {args.lora_path}")
+    if not args.config_path.is_file():
+        parser.error(f"TI2V config does not exist: {args.config_path}")
+    if not args.model_name.is_dir():
+        parser.error(f"TI2V model directory does not exist: {args.model_name}")
+    if not (2 <= args.sample_count <= args.video_length and (args.video_length - 1) % 4 == 0):
+        parser.error("Expected 2 <= sample count <= video length and a video length of 1 + n * 4")
+    if not 0 < args.short_edge <= args.long_edge or min(args.video_fps, args.num_inference_steps) < 1:
+        parser.error("Expected positive sizes, fps and inference steps, with short edge <= long edge")
+    return args
 
-'''
-    功能说明：
-    img_dir: str                    输入图片路径
-        use_input_icc_drop: bool        测试图片进行icc处理，避免色差
-    run_DA3: bool                   是否用DA3估计位姿
-        use_enhance_crop: bool          画面中心增强
-        use_view_extrapolation: bool    视角外插
-    run_livephoto: bool             是否用livephoto进行视角扩充
-        livephoto_captioner: bool      是否使用 Qwen 生成 LivePhoto 正向提示词
-        livephoto_model_offload: bool  是否将 LivePhoto T5 和 DiT 卸载到 CPU
-        livephoto_vae_offload: bool    是否在单次生成内将 VAE 卸载到 CPU
-    run_gen_video: bool             是否进行视频生成
-        video_offload: bool            多图 Wan 推理启用 CPU offload，默认关闭
-        video_vae_offload: bool        多图 VAE 搬到 CPU，video_offload 开启时强制卸载
-        video_warmup_sizes: list       多图预热尺寸列表，顺序为 [高, 宽]，空列表关闭
-        gen_vid_fps: int                视频生成保存fps
-    run_3dgs_iter: bool             是否稠密重建
-'''
+
+def main():
+    args = parse_args()
+    work_dir = args.work_dir.resolve()
+    if (work_dir / "image").is_dir():
+        if args.case:
+            raise SystemExit("--case applies only to a directory of cases")
+        cases = [work_dir]
+    elif args.case:
+        cases = [work_dir / case for case in args.case]
+    elif work_dir.is_dir():
+        cases = sorted(path for path in work_dir.iterdir() if (path / "image").is_dir())
+    else:
+        cases = []
+    if not cases or any(not (case / "image").is_dir() for case in cases):
+        raise SystemExit(f"Could not find the requested case directories with image/ in {work_dir}")
+
+    from pipeline_service_single import SparseRecon
+
+    config = vars(args).copy()
+    for key in ("model_name", "lora_path", "config_path"):
+        config[key] = str(config[key].resolve())
+    for key in ("case", "work_dir", "stage"):
+        del config[key]
+    config["run_DA3"] = args.stage in {"pose", "full"}
+    config["run_3dgs_iter"] = args.stage == "full"
+    recon = SparseRecon(config)
+    try:
+        for case in cases:
+            print(f"process {case}")
+            print(f"result: {recon(work_dir=case, mode='scene')}")
+    finally:
+        recon.shutdown_workers()
+
 
 if __name__ == "__main__":
-    json_str="""{
-                "use_input_icc_drop":false,
-                "use_resize_drop":true,
-                
-                "run_DA3":true,
-                    "use_enhance_crop":false,
-                    "use_view_extrapolation":true,
-
-                "run_livephoto":false,
-                    "livephoto_captioner":false,
-                    "livephoto_model_offload":false,
-                    "livephoto_vae_offload":false,
-                
-                "run_gen_video":true,
-                    "view_num":81,
-                    "gen_vid_infer_step":6,
-                    "gen_vid_fps":30,
-                    "video_offload":false,
-                    "video_vae_offload":false,
-                    "video_batch_size":1,
-                    "video_warmup_sizes":[[1920,1088]],
-                "world_size":2,
-
-                "run_3dgs_iter":true
-                }"""
-    
-    if os.path.exists(json_str):
-        with open(json_str, "r") as json_file:
-            json_args = json.load(json_file)
-            print(f"args from json: {json_args}")
-    else:
-        json_args = json.loads(json_str)
-        print(f"args from json: {json_args}")
-    recon = SparseRecon(json_args)
-
-    skip_list = []
-    # work_dir = "/mnt/DataPart/PrivateSpace/wujinxiao/00_data/00_0829_synchaisi_image"
-    work_dir = "/home/z00566689/dev/mnt/jiang_test/00_1110_multi_res_time_test/multi_image"
-    run_list = os.listdir(work_dir)
-    run_list = ["2160x3840"]
-
-    for item in sorted(os.listdir(work_dir)):
-        if len(run_list) != 0 and item not in run_list:
-            continue
-        if item in skip_list:
-            continue
-        if '.' in item:
-            continue
-
-        data_dir = os.path.join(work_dir, item)
-        if os.path.isdir(data_dir):
-            print(f"process {data_dir}")
-            export_dir=os.path.join(data_dir,"export")
-            recon(work_dir=data_dir, export_dir=export_dir, mode="scene")
+    main()
