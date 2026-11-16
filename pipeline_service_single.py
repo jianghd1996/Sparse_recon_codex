@@ -28,6 +28,7 @@ class DA3Params:
     crop_ratio: float
     extra_view: list
     colmap_max_points: int = 0
+    colmap_point_views: list[int] | None = None
 
 
 def sample_frame_indices(video_length, sample_count):
@@ -75,7 +76,8 @@ DEFAULT_TI2V_CONFIG = {
     "video_length": 121,
     "video_fps": 24,
     "sample_count": 40,
-    "colmap_max_points": 1_100_000,  # 0 disables the cap.
+    "colmap_point_views": None,  # None selects quarter, middle, and three-quarter views.
+    "colmap_max_points": 0,  # A positive cap subsamples the selected views.
     "num_inference_steps": 8,
     "guidance_scale": 6.0,
     "shift": 5.0,
@@ -246,10 +248,16 @@ class SparseRecon:
 
     def _run_da3(self, image_path, colmap_path, expected_names):
         colmap_path.mkdir(parents=True)
+        point_views = self.args.colmap_point_views
+        if point_views is None:
+            view_count = len(self.frame_indices)
+            quarter = view_count // 4
+            point_views = sorted({quarter, view_count // 2, quarter * 3})
         self.run_DA3.infer(args=DA3Params(
             data_path=str(image_path), colmap_path=str(colmap_path),
             gs_render_path=None, view_num=81, crop_ratio=1.0, extra_view=[False, False],
             colmap_max_points=self.args.colmap_max_points,
+            colmap_point_views=point_views,
         ))
         _cleanup_cuda()
 

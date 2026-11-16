@@ -234,6 +234,7 @@ def create_pixel_coordinate_grid(num_frames, height, width):
 
 def save_sparserecon(
     prediction, render_result, images_paths, colmap_path, view_num, crop_ratio, max_points=0,
+    point_views=None,
 ):
     processed_images = prediction.processed_images # np.array
     points_3d_conf = prediction.conf # np.array
@@ -302,6 +303,16 @@ def save_sparserecon(
     thres = np.percentile(points_3d_conf, 20)
     # print(f"filter conf_thres: {thres}")
     masks = points_3d_conf > thres
+    if point_views is not None:
+        if not point_views or any(type(i) is not int or not 0 <= i < N for i in point_views):
+            raise ValueError(f"colmap_point_views must contain DA3 view indices in [0, {N - 1}]")
+        keep_views = np.zeros(N, dtype=bool)
+        keep_views[point_views] = True
+        masks[~keep_views] = False
+        logger.info(
+            "DA3 point source views: {} ({})",
+            point_views, [image_names[i] for i in point_views],
+        )
     point_count = int(np.count_nonzero(masks))
     if max_points and point_count > max_points:
         valid = np.flatnonzero(masks)
@@ -388,6 +399,7 @@ class run_DA3(object):
         save_sparserecon(
             prediction, render_result, images, colmap_path, args.view_num, args.crop_ratio,
             max_points=getattr(args, "colmap_max_points", 0),
+            point_views=getattr(args, "colmap_point_views", None),
         )
         end_time = time.time()
         logger.info(f"Saving colmap info DONE. Time: {end_time - start_time} seconds")
