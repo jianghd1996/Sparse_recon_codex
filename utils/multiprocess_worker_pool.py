@@ -354,7 +354,12 @@ class WorkerPool:
         # model_cpu_offload hooks handle the remaining onloads at forward.
         with self._lock:
             self._ensure_workers_alive()
-            return self._rpc_locked("infer", infer_params_dict, "done", self.result_get_timeout)
+            try:
+                return self._rpc_locked("infer", infer_params_dict, "done", self.result_get_timeout)
+            except KeyboardInterrupt:
+                # An interrupted collective cannot be offloaded safely.
+                self._stop_all()
+                raise
 
     def abort(self):
         """Retire this generation, leaving the pool reusable on the NEXT case."""

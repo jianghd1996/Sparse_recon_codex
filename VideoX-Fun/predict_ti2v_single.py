@@ -1,3 +1,4 @@
+import faulthandler
 from importlib import import_module
 from importlib.util import find_spec
 import sys
@@ -64,6 +65,7 @@ class Wan_5b:
         self.device = torch.device(device)
         self.rank = getattr(args, "rank", 0)
         world_size = getattr(args, "world_size", 1)
+        self.world_size = world_size
         backend = _require_sequence_parallel_backend() if world_size > 1 else None
 
         from videox_fun.models import AutoencoderKLWan3_8, AutoTokenizer, Wan2_2Transformer3DModel, WanT5EncoderModel
@@ -154,20 +156,28 @@ class Wan_5b:
         )
         generator = torch.Generator(device=self.device).manual_seed(args.seed)
         prepared = time.perf_counter()
-        sample = self.pipeline(
-            args.prompt,
-            num_frames=args.video_length,
-            negative_prompt=args.negative_prompt,
-            height=sample_size[0],
-            width=sample_size[1],
-            generator=generator,
-            guidance_scale=args.guidance_scale,
-            num_inference_steps=args.num_inference_steps,
-            boundary=self.boundary,
-            video=input_video,
-            mask_video=input_mask,
-            shift=args.shift,
-        ).videos
+        trace_rank = self.rank if self.world_size > 1 else None
+        if trace_rank is not None:
+            faulthandler.dump_traceback_later(60)
+        try:
+            sample = self.pipeline(
+                args.prompt,
+                num_frames=args.video_length,
+                negative_prompt=args.negative_prompt,
+                height=sample_size[0],
+                width=sample_size[1],
+                generator=generator,
+                guidance_scale=args.guidance_scale,
+                num_inference_steps=args.num_inference_steps,
+                boundary=self.boundary,
+                video=input_video,
+                mask_video=input_mask,
+                shift=args.shift,
+                trace_rank=trace_rank,
+            ).videos
+        finally:
+            if trace_rank is not None:
+                faulthandler.cancel_dump_traceback_later()
         if sample.shape[2] != args.video_length:
             raise RuntimeError(f"TI2V returned {sample.shape[2]} frames, expected {args.video_length}")
         inferred = time.perf_counter()

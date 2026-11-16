@@ -500,6 +500,7 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
         boundary: float = 0.875,
         comfyui_progressbar: bool = False,
         shift: int = 5,
+        trace_rank: Optional[int] = None,
     ) -> Union[WanPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -545,6 +546,8 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
         do_classifier_free_guidance = guidance_scale > 1.0
 
         # 3. Encode input prompt
+        if trace_rank is not None:
+            print(f"TI2V rank {trace_rank}: prompt encoding started", flush=True)
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
             negative_prompt,
@@ -611,6 +614,8 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
             mask_condition = rearrange(mask_condition, "(b f) c h w -> b c f h w", f=video_length)
 
             masked_video = init_video * (torch.tile(mask_condition, [1, 3, 1, 1, 1]) < 0.5)
+            if trace_rank is not None:
+                print(f"TI2V rank {trace_rank}: VAE condition encoding started", flush=True)
             _, masked_video_latents = self.prepare_mask_latents(
                 None,
                 masked_video,
@@ -681,6 +686,8 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
                     local_transformer = self.transformer
 
                 # predict noise model_output
+                if trace_rank is not None and i == 0:
+                    print(f"TI2V rank {trace_rank}: first DiT forward started (seq_len={seq_len})", flush=True)
                 with torch.amp.autocast("cuda", dtype=weight_dtype), torch.cuda.device(device=device):
                     noise_pred = local_transformer(
                         x=latent_model_input,
@@ -688,6 +695,9 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
                         t=timestep,
                         seq_len=seq_len,
                     )
+
+                if trace_rank is not None and i == 0:
+                    print(f"TI2V rank {trace_rank}: first DiT forward returned", flush=True)
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -702,6 +712,9 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
                 if init_video is not None:
                     latents = (1 - mask) * masked_video_latents + mask * latents
+
+                if trace_rank is not None and i == 0:
+                    print(f"TI2V rank {trace_rank}: first diffusion step finished", flush=True)
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -719,6 +732,8 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
                     pbar.update(1)
 
         if output_type == "pil":
+            if trace_rank is not None:
+                print(f"TI2V rank {trace_rank}: VAE decode started", flush=True)
             video = self.decode_latents(latents)
             video = torch.from_numpy(video)
         else:
