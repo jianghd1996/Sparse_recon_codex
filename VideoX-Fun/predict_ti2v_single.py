@@ -23,6 +23,8 @@ class Wan_5b:
 
     def __init__(self, args, device="cuda"):
         self.device = torch.device(device)
+        self.rank = getattr(args, "rank", 0)
+        world_size = getattr(args, "world_size", 1)
         weight_dtype = torch.bfloat16
         config = OmegaConf.load(args.config_path)
         transformer_kwargs = config["transformer_additional_kwargs"]
@@ -35,6 +37,11 @@ class Wan_5b:
             low_cpu_mem_usage=True,
             torch_dtype=weight_dtype,
         )
+        if world_size > 1 and transformer.num_heads % world_size:
+            raise ValueError(
+                f"Ulysses degree {world_size} must divide the DiT's {transformer.num_heads} attention heads"
+            )
+
         vae_kwargs = config["vae_kwargs"]
         vae = AutoencoderKLWan3_8.from_pretrained(
             str(model_dir / vae_kwargs.get("vae_subpath", "vae")),
@@ -68,6 +75,20 @@ class Wan_5b:
             self.pipeline.enable_model_cpu_offload(device=self.device)
         else:
             self.pipeline.to(device=self.device)
+        if world_size > 1:
+            from videox_fun.dist import init_distributed_environment, initialize_model_parallel
+
+            if init_distributed_environment is None or initialize_model_parallel is None:
+                raise RuntimeError("Multi-GPU TI2V requires VideoX-Fun's xFuser backend")
+            init_distributed_environment(
+                rank=self.rank, world_size=world_size, local_rank=self.device.index,
+                distributed_init_method=args.distributed_init_method, backend="nccl",
+            )
+            initialize_model_parallel(
+                sequence_parallel_degree=world_size, ulysses_degree=world_size, ring_degree=1,
+            )
+            transformer.enable_multi_gpus_inference()
+            logger.info("TI2V rank {}/{}: Ulysses={}, Ring=1", self.rank, world_size, world_size)
         self.temporal_stride = vae.temporal_compression_ratio
         self.spatial_alignment = vae.spatial_compression_ratio * 2
         self.boundary = transformer_kwargs.get("boundary", 0.875)
@@ -106,6 +127,8 @@ class Wan_5b:
             raise RuntimeError(f"TI2V returned {sample.shape[2]} frames, expected {args.video_length}")
         inferred = time.perf_counter()
         logger.info("TI2V prepare: {:.2f}s, infer: {:.2f}s", prepared - started, inferred - prepared)
+        if self.rank != 0:
+            return
         selected = set(args.frame_indices)
         output_dir = Path(args.save_path)
         height, width = sample.shape[-2:]

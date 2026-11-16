@@ -73,6 +73,7 @@ DEFAULT_TI2V_CONFIG = {
     "lora_path": "Cloud_Models/Wan2.2-TI2V-5B/lora_ckpts_single8/checkpoint-9600.safetensors",
     "lora_weight": 0.55,
     "model_cpu_offload": True,
+    "world_size": 1,
     "video_length": 121,
     "video_fps": 24,
     "sample_count": 40,
@@ -108,6 +109,19 @@ class SparseRecon:
         self.build_model()
 
     def build_model(self):
+        world_size = self.args.world_size
+        device_id = getattr(self.args, "device_id", 0)
+        if type(world_size) is not int or world_size < 1:
+            raise ValueError("world_size must be a positive integer")
+        if type(device_id) is not int or device_id < 0:
+            raise ValueError("device_id must be a nonnegative integer")
+        device_ids = list(range(device_id, device_id + world_size))
+        visible_devices = torch.cuda.device_count()
+        if device_ids[-1] >= visible_devices:
+            raise ValueError(
+                f"TI2V needs CUDA devices {device_ids}, but only {visible_devices} GPUs are visible"
+            )
+
         cur_py_path = Path(__file__).resolve().parent
         if self.args.run_DA3:
             from DA3.run_da3_full_crop_dev import run_DA3
@@ -133,8 +147,8 @@ class SparseRecon:
             "offload_model": self.args.model_cpu_offload,
         }
         self.pool_A = WorkerPool(
-            "TI2V", 1, model_params, {"sample_size_list": []}, mp.get_context("spawn"),
-            device_ids=[getattr(self.args, "device_id", 0)],
+            "TI2V", world_size, model_params, {"sample_size_list": []}, mp.get_context("spawn"),
+            device_ids=device_ids, distributed=world_size > 1,
         )
         try:
             self.pool_A.start()

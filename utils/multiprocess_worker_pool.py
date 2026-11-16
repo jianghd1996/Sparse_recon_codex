@@ -16,6 +16,8 @@ import threading
 import time
 import traceback
 import uuid
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,7 @@ class WorkerPool:
                  mp_ctx, device_ids=None, ready_timeout=1800,
                  offload_timeout=120, reload_timeout=300,
                  result_get_timeout=3600, *, poll_interval=0.2,
-                 stop_timeout=3.0, _worker_target=None):
+                 stop_timeout=3.0, distributed=False, _worker_target=None):
         if world_size < 1:
             raise ValueError("world_size must be positive")
         self.name, self.world_size = name, world_size
@@ -77,6 +79,8 @@ class WorkerPool:
             if value <= 0:
                 raise ValueError(f"{key} must be positive")
             setattr(self, key, float(value))
+        self._distributed = distributed and world_size > 1
+        self._rendezvous = None
         self._worker_target = _worker_target or persistent_worker_fn
         self._lock = threading.RLock()
         self._closing = threading.Event()
@@ -148,6 +152,10 @@ class WorkerPool:
                 f"{[p.pid for p in survivors]}; refusing to start duplicates"
             )
 
+        if self._rendezvous is not None:
+            self._rendezvous.cleanup()
+            self._rendezvous = None
+
     def _spawn_worker(self, rank):
         q = self.mp_ctx.Queue()
         # Parent only writes tasks. On Python 3.11/3.12, closing its unused
@@ -156,10 +164,18 @@ class WorkerPool:
         # reader.close() with an already running QueueFeederThread at teardown.
         q._ignore_epipe = True
         self.task_queues[rank] = q
+        model_params = self.model_params_dict
+        if self._rendezvous is not None:
+            model_params = {
+                **model_params,
+                "distributed_init_method": (Path(self._rendezvous.name) / "store").as_uri(),
+                "rank": rank,
+                "world_size": self.world_size,
+            }
         p = self.mp_ctx.Process(
             target=self._worker_target,
             args=(rank, self.world_size, self.device_ids[rank],
-                  self.model_params_dict, self.warmup_params_dict,
+                  model_params, self.warmup_params_dict,
                   q, self.result_queue, self.name, self._generation),
         )
         p.daemon = False
@@ -224,6 +240,8 @@ class WorkerPool:
         self._generation += 1
         self.result_queue = self.mp_ctx.Queue()
         try:
+            if self._distributed:
+                self._rendezvous = TemporaryDirectory(prefix="ti2v-nccl-")
             for rank in range(self.world_size):
                 self._spawn_worker(rank)
             _, failed = self._wait_results("model_ready", self.ready_timeout)
@@ -554,6 +572,8 @@ def persistent_worker_fn(rank, world_size, device_id, model_params_dict,
                 continue
             command = message.get("command")
             if command == "stop":
+                if "distributed_init_method" in model_params_dict and torch.distributed.is_initialized():
+                    torch.distributed.destroy_process_group()
                 break
             status, error = _run_command(
                 model, command, message.get("payload"), device_id,

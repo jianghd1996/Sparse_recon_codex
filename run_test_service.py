@@ -12,7 +12,8 @@ import json
 if __name__ == "__main__":
     json_str="""{
                 "run_DA3":true,
-                "run_3dgs_iter":true
+                "run_3dgs_iter":true,
+                "world_size":4
                 }"""
 
     if os.path.exists(json_str):
