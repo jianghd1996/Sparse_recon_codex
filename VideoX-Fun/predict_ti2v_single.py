@@ -1,4 +1,5 @@
 import faulthandler
+from functools import partial
 from importlib import import_module
 from importlib.util import find_spec
 import sys
@@ -56,6 +57,23 @@ def _require_sequence_parallel_backend():
                 setattr(module, name, symbol)
     logger.info("TI2V restored {} bindings for Wan sequence parallelism", backend)
     return fuser
+
+
+def _use_torch_ulysses_attention(transformer, backend):
+    from yunchang.kernels import AttnType
+
+    attention_type = getattr(AttnType, "TORCH_EFFICIENT", None)
+    if attention_type is None:
+        raise RuntimeError("ti2v_attention_backend=torch_efficient requires yunchang's TORCH_EFFICIENT backend")
+
+    # The worker owns this Wan attention module. Keep the xFuser Ulysses
+    # all-to-all path and change only the attention kernel it selects.
+    hook_globals = transformer.blocks[0].self_attn.forward.__func__.__globals__
+    if hook_globals.get("xFuserLongContextAttention") is not backend.xFuserLongContextAttention:
+        raise RuntimeError("The installed Wan sequence-parallel hook does not use the expected xFuser attention")
+    hook_globals["xFuserLongContextAttention"] = partial(
+        backend.xFuserLongContextAttention, attn_type=attention_type,
+    )
 
 
 class Wan_5b:
@@ -133,7 +151,13 @@ class Wan_5b:
                 sequence_parallel_degree=world_size, ulysses_degree=world_size, ring_degree=1,
             )
             transformer.enable_multi_gpus_inference()
-            logger.info("TI2V rank {}/{}: Ulysses={}, Ring=1", self.rank, world_size, world_size)
+            attention_backend = getattr(args, "ti2v_attention_backend", "flash")
+            if attention_backend == "torch_efficient":
+                _use_torch_ulysses_attention(transformer, backend)
+            logger.info(
+                "TI2V rank {}/{}: Ulysses={}, Ring=1, attention={}",
+                self.rank, world_size, world_size, attention_backend,
+            )
         self.temporal_stride = vae.config.temporal_compression_ratio
         self.spatial_alignment = vae.config.spatial_compression_ratio * 2
         self.boundary = transformer_kwargs.get("boundary", 0.875)

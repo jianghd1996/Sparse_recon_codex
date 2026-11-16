@@ -132,8 +132,13 @@ class SparseRecon:
             from Reconstruction_full import Reconstruction
             self.recon_iter_full = Reconstruction(preload=True, dense_init_scene=False)
 
+        attention_backend = getattr(self.args, "ti2v_attention_backend", "flash")
+        if attention_backend not in ("flash", "torch_efficient"):
+            raise ValueError("ti2v_attention_backend must be flash or torch_efficient")
+
         model_params = {
             "module_name": "VideoX-Fun.predict_ti2v_single",
+            "ti2v_attention_backend": attention_backend,
             "class_name": "Wan_5b",
             "config_path": getattr(self.args, "config_path", str(
                 cur_py_path / "VideoX-Fun/config/wan2.2/wan_ti2v_single_5b.yaml"
