@@ -13,17 +13,8 @@ video_x_fun_root = str(Path(__file__).resolve().parent)
 if video_x_fun_root not in sys.path:
     sys.path.insert(0, video_x_fun_root)
 
-from videox_fun.models import AutoencoderKLWan3_8, AutoTokenizer, Wan2_2Transformer3DModel, WanT5EncoderModel
-from videox_fun.pipeline.pipeline_wan2_2_ti2v_single import Wan2_2TI2VPipeline
-from videox_fun.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-from videox_fun.utils.lora_utils_new import merge_lora
-from videox_fun.utils.utils_new import filter_kwargs, get_image_to_video_latent
-
 
 def _require_sequence_parallel_backend():
-    import videox_fun.dist as wan_dist
-    from videox_fun.dist import fuser
-
     distributed_names = (
         "get_sequence_parallel_rank", "get_sequence_parallel_world_size",
         "get_sp_group", "get_world_group", "init_distributed_environment",
@@ -31,11 +22,8 @@ def _require_sequence_parallel_backend():
     )
     attention_name = "xFuserLongContextAttention"
     names = (*distributed_names, attention_name)
-    if all(callable(getattr(fuser, name, None)) for name in names):
-        return fuser
-
-    # A suppressed import failure can leave None in modules that imported
-    # these symbols by value, even when the backend is now importable.
+    # Probe the backend before VideoX-Fun can suppress an import error or
+    # leave a partially registered custom operator behind.
     backend = "paifuser.xfuser" if find_spec("paifuser") is not None else "xfuser"
     try:
         distributed = import_module(f"{backend}.core.distributed")
@@ -45,7 +33,18 @@ def _require_sequence_parallel_backend():
         if not all(callable(symbol) for symbol in bindings.values()):
             raise TypeError("sequence-parallel backend exports are not callable")
     except Exception as exc:
-        raise RuntimeError(f"TI2V could not load {backend}: {type(exc).__name__}: {exc}") from exc
+        raise RuntimeError(
+            f"TI2V could not load {backend} with PyTorch {torch.__version__}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    import videox_fun.dist as wan_dist
+    from videox_fun.dist import fuser
+
+    if all(callable(getattr(fuser, name, None)) for name in names):
+        return fuser
+
+    from videox_fun.models import Wan2_2Transformer3DModel
 
     wan_attention = import_module("videox_fun.dist.wan_xfuser")
     wan_model = import_module(Wan2_2Transformer3DModel.enable_multi_gpus_inference.__module__)
@@ -66,6 +65,13 @@ class Wan_5b:
         self.rank = getattr(args, "rank", 0)
         world_size = getattr(args, "world_size", 1)
         backend = _require_sequence_parallel_backend() if world_size > 1 else None
+
+        from videox_fun.models import AutoencoderKLWan3_8, AutoTokenizer, Wan2_2Transformer3DModel, WanT5EncoderModel
+        from videox_fun.pipeline.pipeline_wan2_2_ti2v_single import Wan2_2TI2VPipeline
+        from videox_fun.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+        from videox_fun.utils.lora_utils_new import merge_lora
+        from videox_fun.utils.utils_new import filter_kwargs
+
         weight_dtype = torch.bfloat16
         config = OmegaConf.load(args.config_path)
         transformer_kwargs = config["transformer_additional_kwargs"]
@@ -133,6 +139,8 @@ class Wan_5b:
 
     @torch.inference_mode()
     def infer(self, args):
+        from videox_fun.utils.utils_new import get_image_to_video_latent
+
         started = time.perf_counter()
         if (args.video_length - 1) % self.temporal_stride:
             raise ValueError(f"TI2V video length must satisfy 1 + n * {self.temporal_stride}")
