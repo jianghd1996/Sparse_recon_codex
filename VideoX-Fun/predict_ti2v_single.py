@@ -132,8 +132,8 @@ class Wan_5b:
             )
             transformer.enable_multi_gpus_inference()
             logger.info("TI2V rank {}/{}: Ulysses={}, Ring=1", self.rank, world_size, world_size)
-        self.temporal_stride = vae.temporal_compression_ratio
-        self.spatial_alignment = vae.spatial_compression_ratio * 2
+        self.temporal_stride = vae.config.temporal_compression_ratio
+        self.spatial_alignment = vae.config.spatial_compression_ratio * 2
         self.boundary = transformer_kwargs.get("boundary", 0.875)
         logger.info("TI2V model ready on {} (model CPU offload: {})", self.device, args.model_cpu_offload)
 
