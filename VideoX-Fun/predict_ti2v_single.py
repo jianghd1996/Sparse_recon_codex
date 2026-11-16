@@ -1,3 +1,5 @@
+from importlib import import_module
+from importlib.util import find_spec
 import sys
 import time
 from pathlib import Path
@@ -18,6 +20,32 @@ from videox_fun.utils.lora_utils_new import merge_lora
 from videox_fun.utils.utils_new import filter_kwargs, get_image_to_video_latent
 
 
+def _require_sequence_parallel_backend():
+    from videox_fun.dist import fuser
+
+    if all(callable(symbol) for symbol in (
+        fuser.init_distributed_environment, fuser.initialize_model_parallel,
+        fuser.get_sp_group, fuser.xFuserLongContextAttention,
+    )):
+        return fuser
+
+    # VideoX-Fun suppresses backend import errors to allow single-GPU use.
+    backend = "paifuser.xfuser" if find_spec("paifuser") is not None else "xfuser"
+    try:
+        distributed = import_module(f"{backend}.core.distributed")
+        for name in (
+            "get_sequence_parallel_rank", "get_sequence_parallel_world_size",
+            "get_sp_group", "get_world_group", "init_distributed_environment",
+            "initialize_model_parallel", "model_parallel_is_initialized",
+        ):
+            getattr(distributed, name)
+        getattr(import_module(f"{backend}.core.long_ctx_attention"), "xFuserLongContextAttention")
+    except Exception as exc:
+        raise RuntimeError(f"TI2V could not load {backend}: {type(exc).__name__}: {exc}") from exc
+
+    raise RuntimeError(f"VideoX-Fun did not enable {backend}; check the adapter at {fuser.__file__}")
+
+
 class Wan_5b:
     """Single-clip TI2V predictor with the same worker interface as LivePhoto."""
 
@@ -25,6 +53,7 @@ class Wan_5b:
         self.device = torch.device(device)
         self.rank = getattr(args, "rank", 0)
         world_size = getattr(args, "world_size", 1)
+        backend = _require_sequence_parallel_backend() if world_size > 1 else None
         weight_dtype = torch.bfloat16
         config = OmegaConf.load(args.config_path)
         transformer_kwargs = config["transformer_additional_kwargs"]
@@ -76,15 +105,11 @@ class Wan_5b:
         else:
             self.pipeline.to(device=self.device)
         if world_size > 1:
-            from videox_fun.dist import init_distributed_environment, initialize_model_parallel
-
-            if init_distributed_environment is None or initialize_model_parallel is None:
-                raise RuntimeError("Multi-GPU TI2V requires VideoX-Fun's xFuser backend")
-            init_distributed_environment(
+            backend.init_distributed_environment(
                 rank=self.rank, world_size=world_size, local_rank=self.device.index,
                 distributed_init_method=args.distributed_init_method, backend="nccl",
             )
-            initialize_model_parallel(
+            backend.initialize_model_parallel(
                 sequence_parallel_degree=world_size, ulysses_degree=world_size, ring_degree=1,
             )
             transformer.enable_multi_gpus_inference()
