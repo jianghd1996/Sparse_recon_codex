@@ -232,7 +232,9 @@ def create_pixel_coordinate_grid(num_frames, height, width):
     return points_xyf
 
 
-def save_sparserecon(prediction, render_result, images_paths, colmap_path, view_num, crop_ratio):
+def save_sparserecon(
+    prediction, render_result, images_paths, colmap_path, view_num, crop_ratio, max_points=0,
+):
     processed_images = prediction.processed_images # np.array
     points_3d_conf = prediction.conf # np.array
     extrinsics = prediction.extrinsics # np.array
@@ -299,8 +301,14 @@ def save_sparserecon(prediction, render_result, images_paths, colmap_path, view_
     # 4. process mask
     thres = np.percentile(points_3d_conf, 20)
     # print(f"filter conf_thres: {thres}")
-    masks = points_3d_conf > thres 
-    masks = masks
+    masks = points_3d_conf > thres
+    point_count = int(np.count_nonzero(masks))
+    if max_points and point_count > max_points:
+        valid = np.flatnonzero(masks)
+        selected = np.random.default_rng(0).choice(valid, size=max_points, replace=False)
+        masks = np.zeros(masks.shape, dtype=bool)
+        masks.flat[selected] = True
+    logger.info("DA3 export points: {} -> {}", point_count, min(point_count, max_points or point_count))
 
     points_3d = plys.cpu().numpy()[masks]
     points_xyf = points_xyf[masks]
@@ -377,7 +385,10 @@ class run_DA3(object):
         logger.info(f"{stage}. Time: {end_time - start_time} seconds")
 
         start_time = time.time()
-        save_sparserecon(prediction, render_result, images, colmap_path, args.view_num, args.crop_ratio)
+        save_sparserecon(
+            prediction, render_result, images, colmap_path, args.view_num, args.crop_ratio,
+            max_points=getattr(args, "colmap_max_points", 0),
+        )
         end_time = time.time()
         logger.info(f"Saving colmap info DONE. Time: {end_time - start_time} seconds")
 

@@ -27,6 +27,7 @@ class DA3Params:
     view_num: int
     crop_ratio: float
     extra_view: list
+    colmap_max_points: int = 0
 
 
 def sample_frame_indices(video_length, sample_count):
@@ -74,6 +75,7 @@ DEFAULT_TI2V_CONFIG = {
     "video_length": 121,
     "video_fps": 24,
     "sample_count": 40,
+    "colmap_max_points": 1_100_000,  # 0 disables the cap.
     "num_inference_steps": 8,
     "guidance_scale": 6.0,
     "shift": 5.0,
@@ -93,6 +95,8 @@ class SparseRecon:
             json_args = json.loads(json_args)
         self.args = DictToObject({**DEFAULT_TI2V_CONFIG, **json_args})
         self.frame_indices = sample_frame_indices(self.args.video_length, self.args.sample_count)
+        if self.args.colmap_max_points < 0:
+            raise ValueError("colmap_max_points must be nonnegative")
         if (self.args.video_length - 1) % 4:
             raise ValueError("Wan2.2 TI2V requires a video length of 1 + n * 4")
         if self.args.run_3dgs_iter and not self.args.run_DA3:
@@ -245,6 +249,7 @@ class SparseRecon:
         self.run_DA3.infer(args=DA3Params(
             data_path=str(image_path), colmap_path=str(colmap_path),
             gs_render_path=None, view_num=81, crop_ratio=1.0, extra_view=[False, False],
+            colmap_max_points=self.args.colmap_max_points,
         ))
         _cleanup_cuda()
 
