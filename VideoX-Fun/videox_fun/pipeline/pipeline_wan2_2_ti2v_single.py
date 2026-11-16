@@ -681,7 +681,7 @@ class Wan2_2TI2VPipeline(DiffusionPipeline):
                     local_transformer = self.transformer
 
                 # predict noise model_output
-                with torch.cuda.amp.autocast(dtype=weight_dtype), torch.cuda.device(device=device):
+                with torch.amp.autocast("cuda", dtype=weight_dtype), torch.cuda.device(device=device):
                     noise_pred = local_transformer(
                         x=latent_model_input,
                         context=in_prompt_embeds,
