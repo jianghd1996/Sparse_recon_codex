@@ -13,7 +13,8 @@ if __name__ == "__main__":
     json_str="""{
                 "run_DA3":true,
                 "run_3dgs_iter":true,
-                "world_size":4
+                "world_size":4,
+                "ti2v_attention_backend":"torch_efficient"
                 }"""
 
     if os.path.exists(json_str):
