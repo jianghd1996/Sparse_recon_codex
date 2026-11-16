@@ -21,29 +21,41 @@ from videox_fun.utils.utils_new import filter_kwargs, get_image_to_video_latent
 
 
 def _require_sequence_parallel_backend():
+    import videox_fun.dist as wan_dist
     from videox_fun.dist import fuser
 
-    if all(callable(symbol) for symbol in (
-        fuser.init_distributed_environment, fuser.initialize_model_parallel,
-        fuser.get_sp_group, fuser.xFuserLongContextAttention,
-    )):
+    distributed_names = (
+        "get_sequence_parallel_rank", "get_sequence_parallel_world_size",
+        "get_sp_group", "get_world_group", "init_distributed_environment",
+        "initialize_model_parallel", "model_parallel_is_initialized",
+    )
+    attention_name = "xFuserLongContextAttention"
+    names = (*distributed_names, attention_name)
+    if all(callable(getattr(fuser, name, None)) for name in names):
         return fuser
 
-    # VideoX-Fun suppresses backend import errors to allow single-GPU use.
+    # A suppressed import failure can leave None in modules that imported
+    # these symbols by value, even when the backend is now importable.
     backend = "paifuser.xfuser" if find_spec("paifuser") is not None else "xfuser"
     try:
         distributed = import_module(f"{backend}.core.distributed")
-        for name in (
-            "get_sequence_parallel_rank", "get_sequence_parallel_world_size",
-            "get_sp_group", "get_world_group", "init_distributed_environment",
-            "initialize_model_parallel", "model_parallel_is_initialized",
-        ):
-            getattr(distributed, name)
-        getattr(import_module(f"{backend}.core.long_ctx_attention"), "xFuserLongContextAttention")
+        attention = import_module(f"{backend}.core.long_ctx_attention")
+        bindings = {name: getattr(distributed, name) for name in distributed_names}
+        bindings[attention_name] = getattr(attention, attention_name)
+        if not all(callable(symbol) for symbol in bindings.values()):
+            raise TypeError("sequence-parallel backend exports are not callable")
     except Exception as exc:
         raise RuntimeError(f"TI2V could not load {backend}: {type(exc).__name__}: {exc}") from exc
 
-    raise RuntimeError(f"VideoX-Fun did not enable {backend}; check the adapter at {fuser.__file__}")
+    wan_attention = import_module("videox_fun.dist.wan_xfuser")
+    wan_model = import_module(Wan2_2Transformer3DModel.enable_multi_gpus_inference.__module__)
+    for name, symbol in bindings.items():
+        setattr(fuser, name, symbol)
+        for module in (wan_dist, wan_attention, wan_model):
+            if hasattr(module, name):
+                setattr(module, name, symbol)
+    logger.info("TI2V restored {} bindings for Wan sequence parallelism", backend)
+    return fuser
 
 
 class Wan_5b:
