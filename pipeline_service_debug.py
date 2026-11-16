@@ -114,7 +114,7 @@ class SparseRecon:
             params_A = {
                 "model_cpu_offload": livephoto_model_offload,
                 "offload_vae": livephoto_vae_offload,
-                "offload_model": livephoto_model_offload and not livephoto_vae_offload,
+                "offload_model": livephoto_model_offload,
                 "module_name": "VideoX-Fun.predict_i2v_4dlivephoto_lightvae",  
                 "class_name": "Wan_5b",                                 
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_4dlp_5b.yaml"),
