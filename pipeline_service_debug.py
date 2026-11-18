@@ -604,7 +604,7 @@ class SparseRecon:
 
             _cleanup_cuda()
 
-        elif (self.args.run_gen_video or self.args.run_3dgs):
+        elif self.args.run_gen_video or self.args.run_3dgs_iter:
             # 分阶段重跑：从磁盘读取上次 DA3 保存的轨迹计划
             _gen_index_path = os.path.join(self.gs_render_path, "gen_index.json")
             if not os.path.isfile(_gen_index_path):
