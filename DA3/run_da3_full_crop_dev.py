@@ -145,6 +145,7 @@ def batch_np_matrix_to_pycolmap_wo_track(
 
     # Reconstruction object, following the format of PyCOLMAP/COLMAP
     reconstruction = pycolmap.Reconstruction()
+    uses_rig_frames = hasattr(pycolmap, "Rig") and hasattr(pycolmap, "Frame")
 
     for vidx in range(P):
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), points_rgb[vidx] * 255)
@@ -163,11 +164,11 @@ def batch_np_matrix_to_pycolmap_wo_track(
             # add camera
             reconstruction.add_camera(camera)
 
-            # add rig (pycolmap>=3.10 需要 Rig/Frame 架构承载位姿)
-            rig = pycolmap.Rig()
-            rig.rig_id = camera.camera_id
-            rig.add_ref_sensor(camera.sensor_id)
-            reconstruction.add_rig(rig)
+            if uses_rig_frames:
+                rig = pycolmap.Rig()
+                rig.rig_id = camera.camera_id
+                rig.add_ref_sensor(camera.sensor_id)
+                reconstruction.add_rig(rig)
 
         # set image
         cam_from_world = pycolmap.Rigid3d(
@@ -184,7 +185,16 @@ def batch_np_matrix_to_pycolmap_wo_track(
         else: 
             img_name = image_names[fidx]
 
-        # pycolmap>=3.10: Image 构造不再接受 id/cam_from_world，位姿通过 Frame(Rig) 设置
+        if not uses_rig_frames:
+            image = pycolmap.Image(
+                id=fidx + 1, name=img_name, camera_id=camera.camera_id,
+                cam_from_world=cam_from_world,
+            )
+            reconstruction.add_image(image)
+            reconstruction.register_image(image.image_id)
+            continue
+
+        # Rig/frame-aware PyCOLMAP stores the pose on the frame.
         image = pycolmap.Image(
             image_id=fidx + 1, name=img_name, camera_id=camera.camera_id
         )
