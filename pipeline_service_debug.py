@@ -25,7 +25,7 @@ from utils.cv_tools import align_images_resolution, get_crop_ratio, get_crop_rat
 from utils.face_detector_retina import FaceDetector
 from utils.utils import calculate_md5, DictToObject
 from utils.multiprocess_worker_pool import _cleanup_cuda, WorkerPool, PoolRecoveryError
-from utils.video_reader_and_sample import seg_index_sample, get_video_to_video_latent_with_imgsize
+from utils.video_reader_and_sample import seg_index_sample, get_video_to_video_latent_with_imgsize, append_input_images
 
 logger.remove()
 logger.add(sys.stderr, 
@@ -488,6 +488,8 @@ class SparseRecon:
         end_T = time.time()
         logger.info(f"initialization took time: {end_T-st_T_total}s")
 
+        # Preserve the real inputs before LivePhoto replaces self.img_path.
+        gt_image_paths = [os.path.join(self.img_path, name) for name in self.list_imgs]
         self.offload_A_future = None
         if self.is_livephoto:
             # 单图重建用40帧
@@ -521,6 +523,27 @@ class SparseRecon:
 
             self.list_imgs = [x for x in os.listdir(self.img_path) if x.lower().endswith(('.png', '.jpg', '.jpeg'))]
             self.list_imgs.sort()
+            if self.img_path == self.live_photo_image:
+                # The center view must be the actual input, not a re-encoded
+                # generated frame. DA3 estimates its pose together with both sides.
+                if len(self.list_imgs) != 3:
+                    raise ValueError("Expected three LivePhoto views: left, input, right")
+                center_path = Path(self.img_path) / self.list_imgs[1]
+                input_path = center_path.with_suffix(".png")
+                input_image = cv2.imread(gt_image_paths[0], cv2.IMREAD_COLOR)
+                if input_image is None:
+                    raise ValueError(f"Cannot read input image: {gt_image_paths[0]}")
+                if (input_image.shape[1], input_image.shape[0]) != self.img_size:
+                    input_image = cv2.resize(input_image, self.img_size, interpolation=cv2.INTER_AREA)
+                if not cv2.imwrite(str(input_path), input_image):
+                    raise RuntimeError(f"Cannot save input image: {input_path}")
+                if input_path != center_path:
+                    center_path.unlink()
+                gt_image_paths = [str(input_path)]
+                self.list_imgs = sorted(
+                    name for name in os.listdir(self.img_path)
+                    if name.lower().endswith(('.png', '.jpg', '.jpeg'))
+                )
         else:
             # 多图重建用240帧
             self.max_frames = 80
@@ -699,7 +722,7 @@ class SparseRecon:
             if not self.save_necessary_only:
                 merge_videos(self.gen_vid_path, self.vid_path)
                 extract_images_from_vid(self.vid_path, img_extract_path, self.args.gen_vid_fps, self.img_size)
-                shutil.copytree(self.img_path, img_extract_path, dirs_exist_ok=True)
+                # True inputs are appended below under collision-free COLMAP names.
             
             gen_vid_time = time.time() - st_T
             
@@ -708,13 +731,27 @@ class SparseRecon:
         
         if self.args.run_3dgs_iter:
             st_T = time.time()
+            reconstruction_frame_count = append_input_images(
+                gt_image_paths, img_extract_path, self.colmap_path,
+            )
+            if self.save_necessary_only:
+                expected_count = self.max_frames + len(gt_image_paths)
+                if reconstruction_frame_count != expected_count:
+                    raise ValueError(
+                        f"Expected {self.max_frames} generated + {len(gt_image_paths)} input images"
+                        f" = {expected_count}, found {reconstruction_frame_count}; rerun video generation"
+                    )
+            logger.info(
+                f"Reconstruction images: {reconstruction_frame_count - len(gt_image_paths)} generated"
+                f" + {len(gt_image_paths)} inputs = {reconstruction_frame_count}; no further sampling"
+            )
             if self.is_livephoto:
                 mode = "scene"
-                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=self.max_frames, use_exists_only=self.save_necessary_only)
-                # self.recon_iter(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=self.max_frames, use_exists_only=self.save_necessary_only)
+                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
+                # self.recon_iter(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
             else:
                 mode = mode
-                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=self.max_frames, use_exists_only=self.save_necessary_only)
+                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
             torch.cuda.empty_cache()
             iter_3dgs_time = time.time()-st_T
             logger.info(f"iter3dgs videos took: {iter_3dgs_time}s")

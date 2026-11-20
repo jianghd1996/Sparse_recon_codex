@@ -256,7 +256,8 @@ def save_sparserecon(prediction, render_result, images_paths, colmap_path, view_
     image_names = []
     ori_rgbs = []
     for ip in images_paths:
-        image_names.append(os.path.basename(ip))
+        # Keep DA3 inputs separate from numeric generated-frame names.
+        image_names.append("input_" + os.path.basename(ip))
         ori_rgbs.append(np.array(Image.open(ip)))
         
     ori_rgbs = np.array(ori_rgbs)

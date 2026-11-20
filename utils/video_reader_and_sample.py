@@ -446,7 +446,9 @@ def farthest_colmap_camera_sampling_idx_force_init_avoid_bad_frames(
 
 def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81):
     segment_index = []
-    init_image_names = get_unique_original_frame_names_prefer_first(gen_index)
+    init_image_names = get_unique_original_frame_names_prefer_first(
+        gen_index, frames_per_video=video_length,
+    )
     from Reconstruction.src.utils.colmap_loader import read_colmap_model
     # from Reconstruction.src.module.cameras import farthest_colmap_camera_sampling_idx_force_init_avoid_bad_frames
 
@@ -457,7 +459,7 @@ def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81):
         colmap_images=colmap_images_dict,
         selected_num=num_frames,
         init_image_names=init_image_names,
-        keep_4k=True,
+        keep_4k=False,  # Input images are copied separately, outside this budget.
         frames_per_segment=video_length,
     )
     selected_list = []
@@ -478,4 +480,42 @@ def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81):
         # print("global_frame_names:", info["global_frame_names"])
         # print("local_frame_indices:", info["local_frame_indices"])
         segment_index.append(info["local_frame_indices"])
+    selected_count = sum(len(indices) for indices in segment_index)
+    if selected_count != num_frames:
+        raise ValueError(f"Requested {num_frames} generated frames, but only {selected_count} valid views are available")
     return segment_index
+
+
+def append_input_images(input_paths, image_dir, colmap_path):
+    """Copy true inputs under their DA3 COLMAP names; return total image count."""
+    import shutil
+    from pathlib import Path
+    from Reconstruction.src.utils.colmap_loader import read_colmap_model
+
+    image_dir = Path(image_dir)
+    cameras, images, _ = read_colmap_model(str(colmap_path))
+    by_name = {image.name: image for image in images.values()}
+    sources = [(Path(path), "input_" + Path(path).name) for path in input_paths]
+    if not sources or len({name for _, name in sources}) != len(sources):
+        raise ValueError("Expected nonempty input images with unique names")
+    # Validate all inputs before copying any files. Never borrow a generated pose.
+    for source, name in sources:
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if name not in by_name:
+            raise ValueError(f"Missing input pose {name}; rerun DA3 with the updated code")
+        camera = cameras[by_name[name].camera_id]
+        with Image.open(source) as image:
+            if image.size != (camera.width, camera.height):
+                raise ValueError(f"Input dimensions do not match COLMAP: {source}")
+    image_dir.mkdir(parents=True, exist_ok=True)
+    for source, name in sources:
+        shutil.copy2(source, image_dir / name)
+    names = {
+        path.name for path in image_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    }
+    missing = names - by_name.keys()
+    if missing:
+        raise ValueError(f"Reconstruction images without COLMAP poses: {sorted(missing)}")
+    return len(names)
