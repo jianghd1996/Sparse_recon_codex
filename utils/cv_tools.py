@@ -1,6 +1,7 @@
 import cv2
 import os
 import tempfile
+from io import BytesIO
 import numpy as np
 from glob import glob
 from tqdm import tqdm
@@ -15,7 +16,7 @@ from pathlib import Path
 import pycolmap
 import shutil
 import concurrent.futures
-from PIL import Image, ImageCms
+from PIL import Image, ImageCms, ImageOps
 import sys
 from .face_match import FaceMatcher
 
@@ -628,84 +629,66 @@ def drop_img_icc(img_path, img_ori_path):
                     print(f"drop icc {file_path}")
                     convert_image_to_srgb_values(file_path, dest_path)
 
-def resize_img(img_path, img_resize_path, img_size):
-  """将 img_path 目录下的所有图片进行 resize 并保存到 img_resize_path。
+def resize_img(img_path, img_resize_path, img_size, drop_icc=True):
+    """修正 EXIF 方向、缩放图片，并按需转为无 ICC 的 sRGB 图片。"""
+    src_dir = Path(img_path).resolve()
+    dst_dir = Path(img_resize_path).resolve()
+    if not src_dir.is_dir():
+        raise ValueError(f"源图片目录不存在: {src_dir}")
+    if src_dir == dst_dir or src_dir in dst_dir.parents or dst_dir in src_dir.parents:
+        raise ValueError("源目录和输出目录必须相互独立")
 
-  参数:
-      img_path (str or Path): 源图片所在目录
-      img_resize_path (str or Path): 缩放后图片的保存目录
-      img_size (tuple or int): 目标尺寸，例如 (2160, 3840) 或 2160 (代表正方形)
-  """
-  src_dir = Path(img_path)
-  dst_dir = Path(img_resize_path)
+    target_size = (img_size, img_size) if isinstance(img_size, int) else tuple(img_size)
+    if len(target_size) != 2 or any(not isinstance(size, int) or size <= 0 for size in target_size):
+        raise ValueError(f"无效的目标尺寸: {img_size}")
+    valid_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+    image_paths = sorted(
+        path for path in src_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in valid_extensions
+    )
+    if not image_paths:
+        print(f"源目录中没有支持的图片: {src_dir}")
+        return
 
-  # 1. 检查源目录是否存在
-  if not src_dir.exists() or not src_dir.is_dir():
-    print(f"❌ 错误：源目录 {src_dir} 不存在或不是文件夹。")
-    return
-
-  # 2. 目标目录处理：如果存在则清空，如果不存在则创建
-  if dst_dir.exists():
-    # 清空目录下的所有文件和子目录
-    for item in dst_dir.iterdir():
-      if item.is_file() or item.is_symlink():
-        item.unlink()
-      elif item.is_dir():
-        shutil.rmtree(item)
-    print(f"🧹 目标目录已存在，已清空: {dst_dir}")
-  else:
     dst_dir.mkdir(parents=True, exist_ok=True)
-    print(f"📁 目标目录不存在，已创建: {dst_dir}")
+    for path in dst_dir.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
-  # 3. 处理 img_size 参数（如果是单个数字，转为 (size, size)）
-  if isinstance(img_size, int):
-    target_size = (img_size, img_size)
-  else:
-    target_size = tuple(img_size)
+    success_count = 0
+    for path in image_paths:
+        try:
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source)
+                icc_profile = image.info.get("icc_profile")
+                exif = image.getexif().tobytes()
+                if drop_icc and icc_profile:
+                    if image.mode not in {"RGB", "CMYK", "LAB"}:
+                        image = image.convert("RGB")
+                    image = ImageCms.profileToProfile(
+                        image,
+                        ImageCms.ImageCmsProfile(BytesIO(icc_profile)),
+                        ImageCms.createProfile("sRGB"),
+                        renderingIntent=0,
+                        outputMode="RGB",
+                    )
+                elif image.mode != "RGB":
+                    image = image.convert("RGB")
 
-  # 4. 支持的图片格式后缀
-  valid_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+                image = image.resize(target_size, Image.Resampling.LANCZOS)
+                image.save(
+                    dst_dir / path.name,
+                    quality=95,
+                    icc_profile=None if drop_icc else icc_profile,
+                    exif=exif,
+                )
+                success_count += 1
+        except Exception as error:
+            print(f"处理图片失败 {path.name}: {error}")
 
-  image_paths = [
-      p for p in src_dir.iterdir() if p.suffix.lower() in valid_extensions
-  ]
-
-  if not image_paths:
-    print(f"⚠️ 警告：在 {src_dir} 下未找到任何支持的图片文件。")
-    return
-
-  print(
-      f"🔍 找到 {len(image_paths)} 张图片，开始 Resize 处理，目标尺寸:"
-      f" {target_size}..."
-  )
-
-  # 5. 遍历并处理每张图片
-  success_count = 0
-  for img_path_item in image_paths:
-    try:
-      with Image.open(img_path_item) as img:
-        # 如果是 RGBA 或带透明通道的格式，转为 RGB 避免保存为 JPG 报错
-        if img.mode in ("RGBA", "LA") or (
-            img.mode == "P" and "transparency" in img.info
-        ):
-          img = img.convert("RGB")
-
-        # 执行 Resize（使用高质量的 ANTIALIAS / LANCZOS 插值）
-        resized_img = img.resize(target_size, Image.Resampling.LANCZOS)
-
-        # 保存至目标目录，保持原文件名
-        output_path = dst_dir / img_path_item.name
-        resized_img.save(output_path, quality=95)
-        success_count += 1
-        print(f"  [成功] 已处理并保存: {output_path.name}")
-
-    except Exception as e:
-      print(f"  [失败] 处理文件 {img_path_item.name} 出错: {e}")
-
-  print(
-      f"✨ 批量 Resize 完成！成功处理 {success_count}/{len(image_paths)} 张图片。"
-  )
-
+    print(f"Resize 完成: {success_count}/{len(image_paths)}, 尺寸 {target_size}, ICC drop={drop_icc}")
 '''
 def resize_img(img_path, img_ori_path, max_long_edge=1920, multiple=16):
     """
