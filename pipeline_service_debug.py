@@ -57,6 +57,7 @@ class SparseRecon:
         logger.info(f"pipeline file: {Path(__file__).resolve()}")
 
         self.args = DictToObject(json_args)
+        self.debug = getattr(self.args, "debug", False)
 
         self.build_model()
     
@@ -360,6 +361,7 @@ class SparseRecon:
             "img_size": self.img_size,
             "input_video": input_video,
             "save_img_ids": segment_index,
+            "save_video": self.debug,
             "prompt_embed_path": self.prompt_embed_path,
         }
 
@@ -587,6 +589,35 @@ class SparseRecon:
                 crop_ratio=crop_ratio,
                 extra_view=[self.args.use_view_extrapolation, self.is_livephoto] # 默认只有单图才走livephoto模式 
             ))
+            if self.debug:
+                debug_video_path = os.path.join(self.gs_render_path, "gs_render.mp4")
+                frames = render_result.rendered_images
+                first_frame = torch.as_tensor(frames[0])
+                if first_frame.ndim != 3:
+                    raise ValueError(f"Expected a DA3 RGB frame, got {first_frame.shape}")
+                channel_first = first_frame.shape[-1] != 3 and first_frame.shape[0] == 3
+                height, width = first_frame.shape[1:] if channel_first else first_frame.shape[:2]
+                writer = cv2.VideoWriter(
+                    debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                    self.args.gen_vid_fps, (width, height),
+                )
+                if not writer.isOpened():
+                    writer.release()
+                    raise RuntimeError(f"Cannot open DA3 debug video: {debug_video_path}")
+                try:
+                    for frame in frames:
+                        frame = torch.as_tensor(frame).detach().cpu()
+                        if channel_first:
+                            frame = frame.permute(1, 2, 0)
+                        if frame.is_floating_point():
+                            frame = frame.clamp(0, 1).mul(255)
+                        frame = frame.to(torch.uint8).contiguous().numpy()
+                        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                finally:
+                    writer.release()
+                if os.path.getsize(debug_video_path) == 0:
+                    raise RuntimeError(f"DA3 debug video is empty: {debug_video_path}")
+                logger.info(f"Saved DA3 debug video: {debug_video_path}")
             gen_index, enhance = render_result.gen_index
             logger.info(f"gen_index: {gen_index}")
 

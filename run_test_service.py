@@ -26,10 +26,12 @@ import time
         video_warmup_sizes: list       多图预热尺寸列表，顺序为 [高, 宽]，空列表关闭
         gen_vid_fps: int                视频生成保存fps
     run_3dgs_iter: bool             是否稠密重建
+    debug: bool                     额外保存 DA3 渲染视频和 gen_video 各段视频
 '''
 
 if __name__ == "__main__":
     json_str="""{
+                "debug":false,
                 "use_input_icc_drop":false,
                 "use_resize_drop":true,
                 

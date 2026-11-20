@@ -653,11 +653,12 @@ class Wan_5b(object):
                     sample = samples[position:position + 1]
                     save_img_ids = args.save_img_ids[segment_id] if len(args.save_img_ids) == len(args.index) else None
                     st_T = time.perf_counter()
-                    if save_img_ids is None:
+                    if save_img_ids is None or getattr(args, "save_video", False):
                         video_path = os.path.join(save_path, f"{segment_id:08d}.mp4")
                         save_videos_grid(sample, video_path, fps=fps)
                         logger.info(f"save gen video: {time.perf_counter() - st_T:.3f}s")
-                    else:
+                    if save_img_ids is not None:
+                        st_T = time.perf_counter()
                         save_selected_images_from_video_tensor(
                             videos=sample,
                             images_path=os.path.join(save_path, "image"),
