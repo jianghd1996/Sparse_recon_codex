@@ -153,7 +153,10 @@ class SparseRecon:
             # —— 模型 B：图片数 >= 2 ——
             params_warmup_B = {
                 "video_length": self.args.view_num,
-                "sample_size_list": getattr(self.args, "video_warmup_sizes", []),
+                "sample_size_list": (
+                    getattr(self.args, "video_warmup_sizes", [])
+                    if getattr(self.args, "video_warmup", True) else []
+                ),
                 "prompt_embed_path": self.prompt_embed_path
             }
             params_B = {
