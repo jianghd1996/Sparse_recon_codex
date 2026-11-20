@@ -658,7 +658,38 @@ class SparseRecon:
             st_T = time.time()     
             self.offload_B_future = self._run_pool_B_gen_video(render_result, crop_image_path)
 
-            # 
+            if self.debug and self.save_necessary_only:
+                writer = None
+                try:
+                    for segment_id in range(len(render_result.gen_index[0]) - 1):
+                        segment_path = os.path.join(self.gen_vid_path, f"{segment_id:08d}.mp4")
+                        capture = cv2.VideoCapture(segment_path)
+                        try:
+                            ok, frame = capture.read()
+                            if not ok:
+                                raise RuntimeError(f"Cannot read generated video: {segment_path}")
+                            if writer is None:
+                                frame_size = (frame.shape[1], frame.shape[0])
+                                writer = cv2.VideoWriter(
+                                    self.vid_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                                    self.args.gen_vid_fps, frame_size,
+                                )
+                                if not writer.isOpened():
+                                    raise RuntimeError(f"Cannot open merged video: {self.vid_path}")
+                            while ok:
+                                if (frame.shape[1], frame.shape[0]) != frame_size:
+                                    raise ValueError(f"Generated video size mismatch: {segment_path}")
+                                writer.write(frame)
+                                ok, frame = capture.read()
+                        finally:
+                            capture.release()
+                    if writer is None:
+                        raise RuntimeError("No generated video segments to merge")
+                finally:
+                    if writer is not None:
+                        writer.release()
+                logger.info(f"Saved merged debug video: {self.vid_path}")
+
             if not self.save_necessary_only:
                 merge_videos(self.gen_vid_path, self.vid_path)
                 extract_images_from_vid(self.vid_path, img_extract_path, self.args.gen_vid_fps, self.img_size)
