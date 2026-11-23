@@ -33,6 +33,7 @@ class FaceDetector:
 
         self.device = torch.device(device)
         self.conf_thres = conf_thres
+        # Minimum bbox longest side, in pixels of the 1024 detector input.
         self.box_thres = box_thres
         self._onloaded = False
 
@@ -180,17 +181,28 @@ class FaceDetector:
         bcls: Tensor = torch.cat([boxes, conf, landms], -1)
         bcls = self.non_max_suppression(bcls, self.conf_thres)
 
+        # Clip to real image content in normalized detector coordinates, so
+        # padding does not contribute to face size. Continuous image boundaries
+        # keep the size gate invariant under uniform input resizing.
+        bcls[:, :4].clamp_min_(0)
+        bcls[:, 0].clamp_max_(w / input_size)
+        bcls[:, 1].clamp_max_(h / input_size)
+        bcls[:, 2].clamp_max_(w / input_size)
+        bcls[:, 3].clamp_max_(h / input_size)
+
+        boxes_size = torch.maximum(bcls[:, 2].sub(bcls[:, 0]), bcls[:, 3].sub(bcls[:, 1]))
+        valid_mask = (
+            boxes_size.mul(self.image_size).greater_equal(self.box_thres)
+            & (bcls[:, 2] > bcls[:, 0])
+            & (bcls[:, 3] > bcls[:, 1])
+        )
+        bcls = bcls[valid_mask]
+
+        # Public outputs remain in original-image pixels, including landmarks.
         bcls[:, :4].mul_(input_size)
         bcls[:, 5:].mul_(input_size)
-
-        bcls[:, :4].clamp_min_(0)
         bcls[:, 0].clamp_max_(w - 1)
         bcls[:, 1].clamp_max_(h - 1)
         bcls[:, 2].clamp_max_(w - 1)
         bcls[:, 3].clamp_max_(h - 1)
-
-        boxes_size = torch.maximum(bcls[:, 2].sub(bcls[:, 0]), bcls[:, 3].sub(bcls[:, 1]))
-        valid_mask = boxes_size.greater_equal(self.box_thres)
-
-        bcls = bcls[valid_mask]
         return bcls
