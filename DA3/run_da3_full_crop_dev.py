@@ -149,6 +149,8 @@ def batch_np_matrix_to_pycolmap_wo_track(
     for vidx in range(P):
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), points_rgb[vidx] * 255)
 
+    # PyCOLMAP 3.10/3.11 store poses on Image; newer releases use Rig/Frame.
+    use_rig_frames = hasattr(pycolmap, "Rig") and hasattr(pycolmap, "Frame")
     camera = None
     # frame idx
     for fidx in range(N):
@@ -163,11 +165,11 @@ def batch_np_matrix_to_pycolmap_wo_track(
             # add camera
             reconstruction.add_camera(camera)
 
-            # add rig (pycolmap>=3.10 需要 Rig/Frame 架构承载位姿)
-            rig = pycolmap.Rig()
-            rig.rig_id = camera.camera_id
-            rig.add_ref_sensor(camera.sensor_id)
-            reconstruction.add_rig(rig)
+            if use_rig_frames:
+                rig = pycolmap.Rig()
+                rig.rig_id = camera.camera_id
+                rig.add_ref_sensor(camera.sensor_id)
+                reconstruction.add_rig(rig)
 
         # set image
         cam_from_world = pycolmap.Rigid3d(
@@ -184,20 +186,25 @@ def batch_np_matrix_to_pycolmap_wo_track(
         else: 
             img_name = image_names[fidx]
 
-        # pycolmap>=3.10: Image 构造不再接受 id/cam_from_world，位姿通过 Frame(Rig) 设置
-        image = pycolmap.Image(
-            image_id=fidx + 1, name=img_name, camera_id=camera.camera_id
-        )
-
-        frame = pycolmap.Frame()
-        frame.frame_id = fidx + 1
-        frame.rig_id = camera.camera_id
-        frame.add_data_id(image.data_id)
-        frame.rig_from_world = cam_from_world
-        reconstruction.add_frame(frame)
-
-        image.frame_id = frame.frame_id
+        if use_rig_frames:
+            image = pycolmap.Image(
+                image_id=fidx + 1, name=img_name, camera_id=camera.camera_id
+            )
+            frame = pycolmap.Frame()
+            frame.frame_id = fidx + 1
+            frame.rig_id = camera.camera_id
+            frame.add_data_id(image.data_id)
+            frame.rig_from_world = cam_from_world
+            reconstruction.add_frame(frame)
+            image.frame_id = frame.frame_id
+        else:
+            image = pycolmap.Image(
+                id=fidx + 1, name=img_name, camera_id=camera.camera_id,
+                cam_from_world=cam_from_world,
+            )
         reconstruction.add_image(image)
+        if not use_rig_frames:
+            reconstruction.register_image(image.image_id)
 
     return reconstruction
 
