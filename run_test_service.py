@@ -47,7 +47,7 @@ if __name__ == "__main__":
                 
                 "run_gen_video":true,
                     "view_num":81,
-                    "gen_vid_infer_step":6,
+                    "gen_vid_infer_step":8,
                     "gen_vid_fps":30,
                     "video_offload":true,
                     "video_vae_offload":true,

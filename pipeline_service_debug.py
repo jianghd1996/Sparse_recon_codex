@@ -116,7 +116,7 @@ class SparseRecon:
                 "model_cpu_offload": livephoto_model_offload,
                 "offload_vae": livephoto_vae_offload,
                 "offload_model": livephoto_model_offload,
-                "module_name": "VideoX-Fun.predict_i2v_4dlivephoto_lightvae",  
+                "module_name": "VideoX-Fun.predict_i2v_4dlivephoto_standardvae",  
                 "class_name": "Wan_5b",                                 
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_4dlp_5b.yaml"),
                 "model_name": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-TI2V-5B/"),
@@ -125,7 +125,6 @@ class SparseRecon:
                 "num_selected_frames": 5,
                 "use_fixed_key_frames": False,
                 "use_vae": False,
-                "vae_path": os.path.join(cur_py_path, "Cloud_Models/transformer_w_skybox_sla/MG-LightVAE.pth"),
                 "video_length": self.args.view_num,
             }
             
@@ -160,19 +159,17 @@ class SparseRecon:
                 "prompt_embed_path": self.prompt_embed_path
             }
             params_B = {
-                "module_name": "VideoX-Fun.predict_v2v_control_5b_separate_planning_all_views_lora_stream_sample",
+                "module_name": "VideoX-Fun.predict_v2v_control_5b_dense",
                 "offload_model": getattr(self.args, "video_offload", False),
                 "offload_vae": getattr(self.args, "video_vae_offload", True),
                 "video_batch_size": getattr(self.args, "video_batch_size", 1),
                 "class_name": "Wan_5b",
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_5b.yaml"),
-                "model_name": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/"),
-                "transformer_path": [os.path.join(cur_py_path, "Cloud_Models/transformer_w_skybox_sla/transformer_lora_merge_weight_sla_quant.pt")],
-                "lora_path": None,
-                "num_inference_steps": self.args.gen_vid_infer_step,
-                "use_vae": getattr(self.args, "use_vae", False),
-                "vae_path": os.path.join(cur_py_path, "Cloud_Models/transformer_w_skybox_sla/MG-LightVAE.pth"),
-                "sla_topk": getattr(self.args, "sla_topk", 0.5),
+                "model_name": os.path.join(cur_py_path, "VideoX-Fun/models/Diffusion_Transformer/Wan2.2-Fun-5B-Control/"),
+                "transformer_path": None,
+                "lora_path": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/12000_lora.safetensors"),
+                "lora_weight": 0.75,
+                "num_inference_steps": getattr(self.args, "gen_vid_infer_step", 8),
                 "video_length": self.args.view_num,
             }
             # pool_B 正常使用全部卡
