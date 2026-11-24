@@ -28,11 +28,18 @@ import time
         gen_vid_fps: int                视频生成保存fps
     run_3dgs_iter: bool             是否稠密重建
     debug: bool                     额外保存 DA3 渲染视频和 gen_video 各段视频
+    save_necessary_only: bool       true 直接存采样图片；false 保存完整视频再采样
+    max_frames: int | null          生成帧采样数，GT 额外追加；null 时单图40、多图80
+    仅重建：run_DA3=false、run_gen_video=false、run_3dgs_iter=true；
+        自动跳过 LivePhoto/预处理，复用已有 gen_video 视频或已存图片重新采样。
+        重跑时保持 view_num 不变。仅有图片且新采样需要缺失帧时，必须提供已存视频或重跑生成。
 '''
 
 if __name__ == "__main__":
     json_str="""{
                 "debug":false,
+                "save_necessary_only":true,
+                "max_frames":null,
                 "use_input_icc_drop":false,
                 "use_resize_drop":true,
                 

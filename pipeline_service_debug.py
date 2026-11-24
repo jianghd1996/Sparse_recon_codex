@@ -25,7 +25,8 @@ from utils.cv_tools import align_images_resolution, get_crop_ratio, get_crop_rat
 from utils.face_detector_retina import FaceDetector
 from utils.utils import calculate_md5, DictToObject
 from utils.multiprocess_worker_pool import _cleanup_cuda, WorkerPool, PoolRecoveryError
-from utils.video_reader_and_sample import seg_index_sample, get_video_to_video_latent_with_imgsize, append_input_images
+from utils.video_reader_and_sample import seg_index_sample, get_video_to_video_latent_with_imgsize
+from utils.reconstruction_sampling import prepare_reconstruction_images
 
 logger.remove()
 logger.add(sys.stderr, 
@@ -58,13 +59,22 @@ class SparseRecon:
 
         self.args = DictToObject(json_args)
         self.debug = getattr(self.args, "debug", False)
+        self.save_necessary_only = getattr(self.args, "save_necessary_only", True)
+        if type(self.save_necessary_only) is not bool:
+            raise ValueError("save_necessary_only must be true or false")
+        configured_max = getattr(self.args, "max_frames", None)
+        if configured_max is not None and (type(configured_max) is not int or configured_max < 1):
+            raise ValueError("max_frames must be a positive integer, or null for single=40/multi=80")
+        self.reconstruction_only = (
+            self.args.run_3dgs_iter and not self.args.run_DA3 and not self.args.run_gen_video
+        )
 
         self.build_model()
     
     def build_model(self,):
         cur_py_path = os.path.dirname(os.path.realpath(__file__))
 
-        if self.args.use_enhance_crop:
+        if self.args.use_enhance_crop and not self.reconstruction_only:
             self.seg_module = Segmentation(os.path.join(cur_py_path, "Cloud_Models/Saliency-Face-DA3"), torch.device('cuda'))
             self.face_detector = FaceDetector(0.8, 50, os.path.join(cur_py_path, "Cloud_Models/Saliency-Face-DA3"), torch.device('cuda'))
 
@@ -94,7 +104,7 @@ class SparseRecon:
         self.mp_ctx = mp.get_context("spawn")
 
         total_gpus = self.world_size
-        if self.args.run_livephoto:
+        if self.args.run_livephoto and not self.reconstruction_only:
             self.img_captioner = None
             if getattr(self.args, "livephoto_captioner", True):
                 from qwen_vl3_images_caption_multigpu_offload import ImagesCaptioner
@@ -191,9 +201,6 @@ class SparseRecon:
                 logger.error("pool B startup failed, cleaning up all workers...")
                 self.shutdown_workers()   # 会遍历 pool_A / pool_B 逐个 shutdown
                 raise
-            # pool B是否启用只存图模式
-        self.save_necessary_only=True
-        # self.save_necessary_only=self.args.save_necessary_only # 可以考虑加到外部控制参数
 
         atexit.register(self.shutdown_workers)
         logger.info(f"[add shutdown] alloc={torch.cuda.memory_allocated()/1e9:.2f}G "
@@ -347,6 +354,12 @@ class SparseRecon:
             if os.path.exists(img_extract_path):
                 shutil.rmtree(img_extract_path)
 
+        # Remove only generated video outputs before a new inference. Otherwise
+        # a later images-only case could accidentally reuse an older debug video.
+        for path in Path(self.gen_vid_path).glob("*.mp4"):
+            if path.name == "result.mp4" or (len(path.stem) == 8 and path.stem.isdigit()):
+                path.unlink()
+
         st_T = time.time()
         
         infer_params_dict = {
@@ -361,7 +374,7 @@ class SparseRecon:
             "img_size": self.img_size,
             "input_video": input_video,
             "save_img_ids": segment_index,
-            "save_video": self.debug,
+            "save_video": self.debug or not self.save_necessary_only,
             "prompt_embed_path": self.prompt_embed_path,
         }
 
@@ -385,6 +398,35 @@ class SparseRecon:
             cleanup_mode = "CPU offload" if getattr(self.args, "video_offload", False) else "cache cleanup"
             logger.info(f"Pool B {cleanup_mode}: {time.perf_counter() - cleanup_started:.2f}s")
         return None
+
+
+    def _prepare_dense_inputs(self, gen_index, input_paths=None, prefer_video=False):
+        started = time.perf_counter()
+        count = prepare_reconstruction_images(
+            gen_index[:-1], self.colmap_path, self.gen_vid_path,
+            self.max_frames, self.args.view_num,
+            input_paths=input_paths, prefer_video=prefer_video,
+        )
+        metadata_path = Path(self.gen_vid_path) / "reconstruction_selection.json"
+        with metadata_path.open(encoding="utf-8") as file:
+            metadata = json.load(file)
+        logger.info(
+            f"Reconstruction images: {self.max_frames} generated + {len(metadata['input_names'])} inputs"
+            f" = {count}; sampled from {metadata['sampled_from']}; prepare took {time.perf_counter() - started:.2f}s"
+        )
+        return count
+
+    def _run_dense_iter(self, frame_count, export_dir, mode, circle):
+        started = time.perf_counter()
+        self.recon_iter_full(
+            work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir),
+            mode="scene" if self.is_livephoto else mode, circle=circle,
+            max_frames=frame_count, use_exists_only=True,
+        )
+        # Every mode now supplies the exact selected images and their GT.
+        # Never let the downstream video reader sample a second time.
+        torch.cuda.empty_cache()
+        return time.perf_counter() - started
 
     def init_recon(self, work_dir:str):
         self.img_path = os.path.join(work_dir, "image")
@@ -416,7 +458,6 @@ class SparseRecon:
             self.is_livephoto = False
 
     def run_sparse_recon(self, work_dir:str, export_dir:str = None, mode:str='auto-scene'):
-        # TODO: save_necessary_only set to False in default, if to use True, need adapt the Reconstruction module
         ffrecon_time = 0.0
         gen_vid_time = 0.0
         iter_3dgs_time = 0.0
@@ -440,6 +481,18 @@ class SparseRecon:
 
         # 预处理信息
         self.init_recon(work_dir)
+        configured_max = getattr(self.args, "max_frames", None)
+        self.max_frames = configured_max if configured_max is not None else (40 if self.is_livephoto else 80)
+        self.offload_A_future = self.offload_B_future = None
+        if self.reconstruction_only:
+            plan_path = Path(self.gs_render_path) / "gen_index.json"
+            with plan_path.open(encoding="utf-8") as file:
+                gen_index = json.load(file)
+            count = self._prepare_dense_inputs(gen_index, prefer_video=True)
+            elapsed = self._run_dense_iter(count, export_dir, mode, gen_index[-1])
+            logger.info(f"iter 3dgs took: {elapsed}s")
+            logger.info(f"sparse_recon took: {time.time() - st_T_total}s in total (reconstruction only)")
+            return export_dir
 
         logger.info(align_images_resolution(self.img_path, os.path.join(work_dir, "image_ori")))
                 
@@ -489,8 +542,6 @@ class SparseRecon:
         gt_image_paths = [os.path.join(self.img_path, name) for name in self.list_imgs]
         self.offload_A_future = None
         if self.is_livephoto:
-            # 单图重建用40帧
-            self.max_frames = 40
             # 用livephoto补充新视角
             if self.args.run_livephoto:
                 st_T = time.time()
@@ -541,9 +592,6 @@ class SparseRecon:
                     name for name in os.listdir(self.img_path)
                     if name.lower().endswith(('.png', '.jpg', '.jpeg'))
                 )
-        else:
-            # 多图重建用240帧
-            self.max_frames = 80
 
 
         # 进行画面裁剪，实现局部增强
@@ -679,6 +727,7 @@ class SparseRecon:
         # vid_colmap_path = os.path.join(self.gen_vid_path, "sparse", "0")
 
         self.offload_B_future = None
+        prepared_frame_count = None
         if self.args.run_gen_video:
             logger.info("run video gen to denoise gs_render video")
             st_T = time.time()     
@@ -718,8 +767,9 @@ class SparseRecon:
 
             if not self.save_necessary_only:
                 merge_videos(self.gen_vid_path, self.vid_path)
-                extract_images_from_vid(self.vid_path, img_extract_path, self.args.gen_vid_fps, self.img_size)
-                # True inputs are appended below under collision-free COLMAP names.
+            prepared_frame_count = self._prepare_dense_inputs(
+                gen_index, gt_image_paths, prefer_video=not self.save_necessary_only,
+            )
             
             gen_vid_time = time.time() - st_T
             
@@ -727,32 +777,15 @@ class SparseRecon:
         # shutil.copytree(self.colmap_path, vid_colmap_path, dirs_exist_ok=True)
         
         if self.args.run_3dgs_iter:
-            st_T = time.time()
-            reconstruction_frame_count = append_input_images(
-                gt_image_paths, img_extract_path, self.colmap_path,
+            if prepared_frame_count is None:
+                prepared_frame_count = self._prepare_dense_inputs(
+                    gen_index, gt_image_paths, prefer_video=True,
+                )
+            iter_3dgs_time = self._run_dense_iter(
+                prepared_frame_count, export_dir, mode, circle,
             )
-            if self.save_necessary_only:
-                expected_count = self.max_frames + len(gt_image_paths)
-                if reconstruction_frame_count != expected_count:
-                    raise ValueError(
-                        f"Expected {self.max_frames} generated + {len(gt_image_paths)} input images"
-                        f" = {expected_count}, found {reconstruction_frame_count}; rerun video generation"
-                    )
-            logger.info(
-                f"Reconstruction images: {reconstruction_frame_count - len(gt_image_paths)} generated"
-                f" + {len(gt_image_paths)} inputs = {reconstruction_frame_count}; no further sampling"
-            )
-            if self.is_livephoto:
-                mode = "scene"
-                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
-                # self.recon_iter(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
-            else:
-                mode = mode
-                self.recon_iter_full(work_dir=Path(self.gen_vid_path), export_dir=Path(export_dir), mode = mode, circle=circle, max_frames=reconstruction_frame_count, use_exists_only=self.save_necessary_only)
-            torch.cuda.empty_cache()
-            iter_3dgs_time = time.time()-st_T
             logger.info(f"iter3dgs videos took: {iter_3dgs_time}s")
-            
+
 
         logger.info(f"\n-------total elapsed time-------")
         logger.info(f"4dlivephoto took: {run_livephoto_time}s")

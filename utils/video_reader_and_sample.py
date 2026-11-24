@@ -444,7 +444,7 @@ def farthest_colmap_camera_sampling_idx_force_init_avoid_bad_frames(
     return {key: colmap_images[key] for key in final_keys}
 
 
-def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81):
+def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81, colmap_images=None):
     segment_index = []
     init_image_names = get_unique_original_frame_names_prefer_first(
         gen_index, frames_per_video=video_length,
@@ -452,7 +452,8 @@ def seg_index_sample(gen_index, colmap_path, num_frames=80, video_length=81):
     from Reconstruction.src.utils.colmap_loader import read_colmap_model
     # from Reconstruction.src.module.cameras import farthest_colmap_camera_sampling_idx_force_init_avoid_bad_frames
 
-    colmap_cameras, colmap_images, colmap_points = read_colmap_model(colmap_path)
+    if colmap_images is None:
+        _, colmap_images, _ = read_colmap_model(colmap_path)
     ordered_images = sorted(list(colmap_images.values()), key=lambda i: i.name)
     colmap_images_dict = {image.id: image for image in ordered_images}
     sampled_colmap_images = farthest_colmap_camera_sampling_idx_force_init_avoid_bad_frames(
