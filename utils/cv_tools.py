@@ -617,17 +617,37 @@ def convert_image_to_srgb_values(input_image_path, output_image_path):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-def drop_img_icc(img_path, img_ori_path):
-        if not os.path.exists(img_ori_path):
-            os.rename(img_path, img_ori_path)
-        os.makedirs(img_path, exist_ok=True)
-        for root, _, files in os.walk(img_ori_path):
-            for file_name in files:
-                if '.png' in file_name or '.jpg' in file_name:
-                    file_path = os.path.join(root, file_name)
-                    dest_path = os.path.join(img_path, file_name)
-                    print(f"drop icc {file_path}")
-                    convert_image_to_srgb_values(file_path, dest_path)
+def drop_img_icc(img_path, img_icc_path):
+    """Convert images to untagged sRGB in a separate output directory."""
+    src_dir = Path(img_path).resolve()
+    dst_raw = Path(img_icc_path)
+    if not src_dir.is_dir():
+        raise ValueError(f"源图片目录不存在: {src_dir}")
+    if dst_raw.is_symlink():
+        raise ValueError(f"不允许输出目录是符号链接: {dst_raw}")
+    dst_dir = dst_raw.resolve()
+    if src_dir == dst_dir or src_dir in dst_dir.parents or dst_dir in src_dir.parents:
+        raise ValueError("源目录和输出目录必须相互独立")
+
+    extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    sources = sorted(
+        path for path in src_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in extensions
+    )
+    if not sources:
+        raise ValueError(f"源目录中没有支持的图片: {src_dir}")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    # Match resize_img: refresh only the dedicated output, keeping image/ intact.
+    for path in dst_dir.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    for source in sources:
+        destination = dst_dir / source.name
+        convert_image_to_srgb_values(str(source), str(destination))
+        if not destination.is_file():
+            raise RuntimeError(f"ICC 处理失败: {source}")
 
 def resize_img(img_path, img_resize_path, img_size, drop_icc=True):
     """修正 EXIF 方向、缩放图片，并按需转为无 ICC 的 sRGB 图片。"""
