@@ -37,7 +37,7 @@ if __name__ == "__main__":
                 "use_resize_drop":true,
                 
                 "run_DA3":true,
-                    "use_enhance_crop":false,
+                    "use_enhance_crop":true,
                     "use_view_extrapolation":true,
 
                 "run_livephoto":true,
