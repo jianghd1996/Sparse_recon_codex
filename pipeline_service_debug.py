@@ -165,7 +165,7 @@ class SparseRecon:
                 "video_batch_size": getattr(self.args, "video_batch_size", 1),
                 "class_name": "Wan_5b",
                 "config_path": os.path.join(cur_py_path, "VideoX-Fun/config/wan2.2/wan_civitai_5b.yaml"),
-                "model_name": os.path.join(cur_py_path, "VideoX-Fun/models/Diffusion_Transformer/Wan2.2-Fun-5B-Control/"),
+                "model_name": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/"),
                 "transformer_path": None,
                 "lora_path": os.path.join(cur_py_path, "Cloud_Models/Wan2.2-Fun-5B-Control/12000_lora.safetensors"),
                 "lora_weight": 0.75,
