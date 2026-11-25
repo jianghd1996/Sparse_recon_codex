@@ -33,9 +33,9 @@ import time
 
 if __name__ == "__main__":
     json_str="""{
-                "debug":false,
-                "use_input_icc_drop":false,
-                "use_resize_drop":true,
+                "debug":true,
+                "use_input_icc_drop":true,
+                "use_resize_drop":false,
                 
                 "run_DA3":true,
                     "use_enhance_crop":true,
@@ -71,9 +71,9 @@ if __name__ == "__main__":
 
     skip_list = []
     # work_dir = "/mnt/DataPart/PrivateSpace/wujinxiao/00_data/00_0829_synchaisi_image"
-    work_dir = "/home/z00566689/dev/mnt/jiang_test/00_1110_multi_res_time_test/single_image"
+    work_dir = "/mnt/DataPart/PrivateSpace/jianghongda/data/test/"
     run_list = os.listdir(work_dir)
-    run_list = ["2160x2160"]
+    run_list = ["1张_vehicle"]
 
     for item in sorted(os.listdir(work_dir)):
         if len(run_list) != 0 and item not in run_list:
