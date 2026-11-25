@@ -609,7 +609,11 @@ def convert_image_to_srgb_values(input_image_path, output_image_path):
 
             # 4. Save the new image data without embedding a profile
             # The 'icc_profile=None' parameter drops the metadata
-            converted_img.save(output_image_path, quality=90, icc_profile=None)
+            # Preserve orientation metadata for the independent resize/EXIF stage.
+            converted_img.save(
+                output_image_path, quality=90, icc_profile=None,
+                exif=img.getexif().tobytes(),
+            )
             print(f"Saved the untagged sRGB image to {output_image_path}.")
 
     except IOError as e:
@@ -649,8 +653,8 @@ def drop_img_icc(img_path, img_icc_path):
         if not destination.is_file():
             raise RuntimeError(f"ICC 处理失败: {source}")
 
-def resize_img(img_path, img_resize_path, img_size, drop_icc=True):
-    """修正 EXIF 方向、缩放图片，并按需转为无 ICC 的 sRGB 图片。"""
+def resize_img(img_path, img_resize_path, img_size):
+    """修正 EXIF 方向并缩放图片；保留 ICC，不进行颜色配置转换。"""
     src_dir = Path(img_path).resolve()
     dst_dir = Path(img_resize_path).resolve()
     if not src_dir.is_dir():
@@ -684,31 +688,21 @@ def resize_img(img_path, img_resize_path, img_size, drop_icc=True):
                 image = ImageOps.exif_transpose(source)
                 icc_profile = image.info.get("icc_profile")
                 exif = image.getexif().tobytes()
-                if drop_icc and icc_profile:
-                    if image.mode not in {"RGB", "CMYK", "LAB"}:
-                        image = image.convert("RGB")
-                    image = ImageCms.profileToProfile(
-                        image,
-                        ImageCms.ImageCmsProfile(BytesIO(icc_profile)),
-                        ImageCms.createProfile("sRGB"),
-                        renderingIntent=0,
-                        outputMode="RGB",
-                    )
-                elif image.mode != "RGB":
+                if image.mode != "RGB":
                     image = image.convert("RGB")
 
                 image = image.resize(target_size, Image.Resampling.LANCZOS)
                 image.save(
                     dst_dir / path.name,
                     quality=95,
-                    icc_profile=None if drop_icc else icc_profile,
+                    icc_profile=icc_profile,
                     exif=exif,
                 )
                 success_count += 1
         except Exception as error:
             print(f"处理图片失败 {path.name}: {error}")
 
-    print(f"Resize 完成: {success_count}/{len(image_paths)}, 尺寸 {target_size}, ICC drop={drop_icc}")
+    print(f"Resize 完成: {success_count}/{len(image_paths)}, 尺寸 {target_size}")
 '''
 def resize_img(img_path, img_ori_path, max_long_edge=1920, multiple=16):
     """

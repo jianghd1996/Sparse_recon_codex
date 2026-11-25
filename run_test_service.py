@@ -12,7 +12,8 @@ import time
 '''
     功能说明：
     img_dir: str                    输入图片路径
-        use_input_icc_drop: bool        测试图片进行icc处理，避免色差
+        use_input_icc_drop: bool        独立转为 sRGB 并去除 ICC，结果存到 image_icc
+        use_resize_drop: bool           独立修正 EXIF 并缩放，结果存到 image_resize，不处理 ICC
     run_DA3: bool                   是否用DA3估计位姿
         use_enhance_crop: bool          画面中心增强
         use_view_extrapolation: bool    视角外插

@@ -467,22 +467,17 @@ class SparseRecon:
 
         self.img_size = (width, height)
 
-        # 处理图像ICC drop的问题，在最开始就去掉，默认后面都无需管了
-        # Warning! 用Image.save()可能会保留图片原本的分辨率，导致分辨率不对齐。
-        if self.args.use_input_icc_drop and not self.args.use_resize_drop:
+        # Independent stages: ICC conversion keeps the input dimensions and
+        # writes image_icc/. Resize reads the current stage and writes image_resize/.
+        if self.args.use_input_icc_drop:
             img_icc_path = os.path.join(work_dir, "image_icc")
             drop_img_icc(self.img_path, img_icc_path)
             self.img_path = img_icc_path
 
-        # 这里把逻辑变了，原图文件夹保持不变，以免影响其他的算法执行
         if self.args.use_resize_drop:
             print(f"resize images for matching")
             img_resize_path = os.path.join(work_dir, "image_resize")
-            # if not os.path.exists(img_resize_path):
-            resize_img(
-                self.img_path, img_resize_path, self.img_size,
-                drop_icc=self.args.use_input_icc_drop,
-            )
+            resize_img(self.img_path, img_resize_path, self.img_size)
             self.img_path = img_resize_path
 
         end_T = time.time()
