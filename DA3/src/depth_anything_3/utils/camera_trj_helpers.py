@@ -724,6 +724,19 @@ class Camera_grid(object):
 
         results = torch.tensor(np.concatenate(results, 0)).float()
 
+        # TEMP YAW DEBUG: both pose sets use the planning center and axes.
+        yaw_mid = (self.yaw_min + self.yaw_max) / 2
+        for label, poses in [('input', torch.stack(self.new_cameras)),
+                             ('planned', results)]:
+            poses_np = poses.detach().cpu().numpy()
+            centers = -np.einsum('nji,nj->ni', poses_np[:, :3, :3], poses_np[:, :3, 3])
+            yaws = np.degrees(np.arctan2(-centers[:, 0], centers[:, 2]))
+            yaws = yaw_mid + (yaws - yaw_mid + 180) % 360 - 180
+            print(f'[YAW DEBUG] {label}: count={len(yaws)}, '
+                  f'min={yaws.min():.6f}, max={yaws.max():.6f}, '
+                  f'span={np.ptp(yaws):.6f} deg', flush=True)
+        # END TEMP YAW DEBUG
+
         for i in range(len(results)):
             new_w2c_R = results[i][:3, :3]
             new_w2c_T = results[i][:3, 3]
